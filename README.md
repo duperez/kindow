@@ -43,18 +43,38 @@ com aquele repositório.
    temos ainda). O objetivo é não deixar a API de terceiro vazar pelo resto do código, não criar
    camada de abstração especulativa.
 
+## Pesquisa técnica — concluída
+
+As três frentes de pesquisa terminaram, cada uma com decisões concretas registradas em
+`docs/findings/`:
+
+- [`rfb-protocol.md`](docs/findings/rfb-protocol.md) — segurança `None`, formato de pixel padrão
+  do servidor com conversão pra cinza no cliente, encoding `Raw` (+`CopyRect` opcional),
+  confirmação de que atualização sob demanda é o próprio design nativo do protocolo (não um
+  "jeito de forçar"), e recomendação de reconectar a cada interação em vez de manter socket
+  ocioso (mitiga o WiFi do Kindle entrando em economia de energia).
+- [`libvncclient-api.md`](docs/findings/libvncclient-api.md) — API mínima (`rfbGetClient` +
+  `MallocFrameBuffer`/`GotFrameBufferUpdate`), integração com o loop do GTK2 via
+  `g_io_add_watch` (não thread separada, pelo menos de início), build mínimo via CMake (só zlib
+  como dependência externa real), toolchain de cross-compile modelado no exemplo de MinGW do
+  próprio repositório, e o achado importante de licença: **GPLv2** — o projeto inteiro precisa
+  ser open-source quando for publicado.
+- [`pi-vnc-server.md`](docs/findings/pi-vnc-server.md) — TigerVNC (`Xvnc`) em vez de `x11vnc`
+  (não depende de sessão X já rodando), expondo só um `xterm` sem gerenciador de janelas,
+  unit `systemd` seguindo o padrão já usado no projeto `kindle`.
+
 ## Próximos passos
 
-Pesquisa técnica antes de codar (nessa ordem):
-
-- Protocolo RFB (RFC 6143) — handshake, tipos de segurança, formato de pixel, mensagens
-  mínimas necessárias (`FramebufferUpdateRequest`, `PointerEvent`, `KeyEvent`).
-- API do `libvncclient` — callbacks, como cross-compilar via CMake dentro do container Docker
-  do toolchain (hoje só temos Meson configurado lá, pro projeto `kindle`).
-- Servidor VNC pro lado do Pi — `x11vnc` vs `TigerVNC`/`Xvnc`, o que é mais leve pro Pi 3B
-  (1GB RAM) e mais simples de rodar como serviço `systemd`.
-- Ambiente gráfico mínimo no Pi — hoje ele é totalmente headless. Decidir o mínimo necessário
-  pra ter algo pra "ver" (pode ser só um terminal, sem gerenciador de janelas).
+1. ~~Configurar o TigerVNC de verdade no Pi~~ — **feito e testado**: `Xtigervnc` + `xterm`
+   sozinho (sem WM) rodando via unit `systemd` (`vnc-kindle.service`), acessado com sucesso a
+   partir de um cliente VNC nativo no Mac. Achados reais de RAM e uma pegadinha de versão do
+   TigerVNC 1.15 registrados em [`pi-vnc-server.md`](docs/findings/pi-vnc-server.md).
+2. Escrever o toolchain file de CMake pro `arm-kindlehf-linux-gnueabihf` e cross-compilar o
+   `libvncclient` dentro do container Docker do toolchain (reaproveitado do projeto `kindle`).
+3. Escrever o app GTK do Kindle: módulo de integração com `libvncclient` isolado (conforme
+   princípio de isolamento já decidido), conectar, desenhar o framebuffer recebido via Cairo,
+   traduzir toque em `PointerEvent`.
+4. Testar ponta a ponta no hardware real (Kindle ↔ Pi).
 
 ## Estrutura do repositório
 
