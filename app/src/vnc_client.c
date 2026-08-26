@@ -3,19 +3,16 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <rfb/rfbclient.h>
 
 #include "pixel_convert.h"
 
-/* Deadline total pra vnc_client_fetch_frame — evita travar o app pra sempre se o Pi
- * ficar inalcançável no meio de uma interação (WiFi do Kindle caindo, etc). */
-#define FETCH_TIMEOUT_USEC (5 * 1000 * 1000)
-#define POLL_SLICE_USEC (200 * 1000)
-
 struct VncClient {
     rfbClient *rfb;
     bool frame_ready;
+    bool got_pixels;
 };
 
 /* Qualquer endereço único serve de "tag" pra rfbClientSetClientData/GetClientData. */
@@ -48,12 +45,34 @@ static void on_finished_update(rfbClient *rfb) {
     }
 }
 
+/* Observado na prática contra o TigerVNC real: a primeira resposta a um
+ * FramebufferUpdateRequest não-incremental às vezes vem com um retângulo vazio (0x0) —
+ * um "ack" sem conteúdo, antes do frame de verdade chegar num segundo burst. Sem isso,
+ * vnc_client_handle_messages consideraria a busca completa cedo demais e devolveria um
+ * framebuffer inteiramente zerado (preto). */
+static void on_got_update(rfbClient *rfb, int x, int y, int w, int h) {
+    (void)x;
+    (void)y;
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    VncClient *self = rfbClientGetClientData(rfb, (void *)kClientDataTag);
+    if (self) {
+        self->got_pixels = true;
+    }
+}
+
 VncClient *vnc_client_connect(const char *host, int port, char **out_error) {
     rfbClient *rfb = rfbGetClient(8, 3, 4);
     if (!rfb) {
         set_error(out_error, "rfbGetClient falhou");
         return NULL;
     }
+
+    /* Decisão em docs/findings/rfb-protocol.md: só Raw (mais simples de raciocinar, sem
+     * estado de compressor). Sem isso, o padrão da lib ("tight zrle ultra copyrect hextile
+     * zlib corre rre raw") faria o servidor escolher ZRLE. */
+    rfb->appData.encodingsString = "raw";
 
     VncClient *self = calloc(1, sizeof(VncClient));
     if (!self) {
@@ -64,6 +83,7 @@ VncClient *vnc_client_connect(const char *host, int port, char **out_error) {
     self->rfb = rfb;
 
     rfb->MallocFrameBuffer = on_malloc_framebuffer;
+    rfb->GotFrameBufferUpdate = on_got_update;
     rfb->FinishedFrameBufferUpdate = on_finished_update;
     rfbClientSetClientData(rfb, (void *)kClientDataTag, self);
 
@@ -99,7 +119,43 @@ VncClient *vnc_client_connect(const char *host, int port, char **out_error) {
         return NULL;
     }
 
+    /* client->updateRect nunca é inicializado por rfbGetClient (fica {0,0,0,0}) — a lib
+     * espera que o chamador faça isso (é o que rfbInitConnection, a versão interna que
+     * rfbInitClient usa, faz nesse ponto exato). Sem isso, SendIncrementalFramebufferUpdate-
+     * Request (chamada automaticamente pela lib depois de cada FramebufferUpdate — ver
+     * vnc_client_start_updates) pediria sempre um retângulo 0x0. */
+    rfb->updateRect.x = 0;
+    rfb->updateRect.y = 0;
+    rfb->updateRect.w = rfb->width;
+    rfb->updateRect.h = rfb->height;
+    rfb->isUpdateRectManagedByLib = TRUE;
+
+    /* Mesma categoria de gap do updateRect acima: rfbGetClient não inicializa
+     * endianTest (fica 0 via calloc interno) — só rfbInitClient() faz isso
+     * (vncviewer.c: "client->endianTest = 1"), e a gente não passa por ali. Sem isso, as
+     * macros rfbClientSwap16/32IfLE (usadas por SendExtDesktopSize, entre outras) nunca
+     * trocam a ordem de bytes de verdade — em vez de detectar little-endian, sempre
+     * tratam como se já estivesse na ordem de rede, corrompendo qualquer valor de 16/32
+     * bits que dependa dessas macros nesse ARM little-endian. */
+    rfb->endianTest = 1;
+
     return self;
+}
+
+int vnc_client_get_fd(const VncClient *client) {
+    return client->rfb->sock;
+}
+
+bool vnc_client_start_updates(VncClient *client, char **out_error) {
+    rfbClient *rfb = client->rfb;
+    client->frame_ready = false;
+    client->got_pixels = false;
+
+    if (!SendFramebufferUpdateRequest(rfb, 0, 0, rfb->width, rfb->height, FALSE)) {
+        set_error(out_error, "falha ao pedir a primeira atualização de tela");
+        return false;
+    }
+    return true;
 }
 
 /* Converte client->frameBuffer (no formato de pixel negociado, seja qual for) pra um
@@ -125,44 +181,113 @@ static void convert_and_emit(rfbClient *rfb, VncFrameReadyFn on_frame, void *use
         .blue_shift = pf->blueShift,
         .blue_max = pf->blueMax,
     };
+
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     pixel_convert_to_grayscale_argb32(rfb->frameBuffer, width, height, &format, pixels);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    long convert_ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+    rfbClientLog("kindow: conversão de pixel (%dx%d) levou %ld ms\n", width, height, convert_ms);
 
     on_frame(width, height, pixels, user_data);
     free(pixels);
 }
 
-bool vnc_client_fetch_frame(VncClient *client, VncFrameReadyFn on_frame, void *user_data,
-                             char **out_error) {
+bool vnc_client_handle_messages(VncClient *client, VncFrameReadyFn on_frame, void *user_data,
+                                 char **out_error) {
     rfbClient *rfb = client->rfb;
-    client->frame_ready = false;
 
-    if (!SendFramebufferUpdateRequest(rfb, 0, 0, rfb->width, rfb->height, FALSE)) {
-        set_error(out_error, "falha ao pedir atualização de tela");
+    if (!HandleRFBServerMessage(rfb)) {
+        set_error(out_error, "erro processando mensagem do servidor");
         return false;
     }
 
-    int waited_usec = 0;
-    while (!client->frame_ready) {
-        int n = WaitForMessage(rfb, POLL_SLICE_USEC);
-        if (n < 0) {
-            set_error(out_error, "conexão perdida esperando atualização de tela");
-            return false;
-        }
-        if (n == 0) {
-            waited_usec += POLL_SLICE_USEC;
-            if (waited_usec >= FETCH_TIMEOUT_USEC) {
-                set_error(out_error, "tempo esgotado esperando atualização de tela");
-                return false;
-            }
-            continue;
-        }
-        if (!HandleRFBServerMessage(rfb)) {
-            set_error(out_error, "erro processando mensagem do servidor");
-            return false;
-        }
+    if (client->frame_ready && !client->got_pixels) {
+        /* Burst vazio (Achado #2) — a lib já disparou sozinha o próximo pedido
+         * incremental (HandleRFBServerMessage, rfbclient.c ~linha 2564); só falta esperar
+         * a resposta de verdade chegar numa próxima leitura do fd. */
+        client->frame_ready = false;
+        return false;
     }
 
+    if (!(client->frame_ready && client->got_pixels)) {
+        return false;
+    }
+
+    client->frame_ready = false;
+    client->got_pixels = false;
     convert_and_emit(rfb, on_frame, user_data);
+    return true;
+}
+
+/* Réplica local de rfbClientSwap16IfLE (macro pública em rfbclient.h) — a macro original
+ * assume uma variável chamada literalmente "client" do tipo rfbClient* no escopo, o que
+ * colide com o nosso próprio parâmetro "client" (do tipo VncClient*, o wrapper deste
+ * módulo). Mesma lógica, só parametrizada explicitamente pra evitar a colisão de nomes. */
+static uint16_t swap16_if_le(rfbClient *rfb, uint16_t s) {
+    if (*(char *)&rfb->endianTest) {
+        return (uint16_t)(((s & 0xffu) << 8) | ((s >> 8) & 0xffu));
+    }
+    return s;
+}
+
+bool vnc_client_request_desktop_size(VncClient *client, int width, int height,
+                                      char **out_error) {
+    if (!client) {
+        return false;
+    }
+    rfbClient *rfb = client->rfb;
+
+    /* Não usa SendExtDesktopSize() da própria lib: ela monta o rfbExtDesktopScreen só
+     * preenchendo width/height, deixando id/x/y/flags com lixo de pilha não inicializado —
+     * confirmado contra o TigerVNC real, que rejeita com "Invalid screen layout requested
+     * by client" quando id vem com valor aleatório em vez de um id de tela válido. Monta a
+     * mensagem por conta própria (mesmo formato de wire, mesmas structs/constantes
+     * públicas), zerando tudo que a lib deixa passar batido. */
+    rfbSetDesktopSizeMsg sdm;
+    memset(&sdm, 0, sizeof(sdm));
+    sdm.type = rfbSetDesktopSize;
+    sdm.width = swap16_if_le(rfb, (uint16_t)width);
+    sdm.height = swap16_if_le(rfb, (uint16_t)height);
+    sdm.numberOfScreens = 1;
+
+    rfbExtDesktopScreen screen;
+    memset(&screen, 0, sizeof(screen));
+    /* id=0 é tratado como "tela inválida" pelo código de LEITURA da própria lib
+     * (rfbclient.c: "if (screen.id != 0 && screen.width && screen.height)") — o servidor
+     * ecoa de volta o id que a gente manda, e se for 0, nosso próprio parser descarta a
+     * resposta como invalidScreen, pulando ResizeClientBuffer (client->width/height nunca
+     * atualiza, mesmo o servidor aplicando o resize de verdade do lado dele). Precisa ser
+     * um id não-zero — 1 é a convenção padrão pra tela única; a lib só checa "diferente de
+     * zero", não compara valor específico, então não precisa de swap de byte-order aqui. */
+    screen.id = 1;
+    screen.width = swap16_if_le(rfb, (uint16_t)width);
+    screen.height = swap16_if_le(rfb, (uint16_t)height);
+
+    rfbClientLog("kindow: pedindo redimensionamento da tela remota pra %dx%d\n", width, height);
+    if (!WriteToRFBServer(rfb, (char *)&sdm, sz_rfbSetDesktopSizeMsg) ||
+        !WriteToRFBServer(rfb, (char *)&screen, sz_rfbExtDesktopScreen)) {
+        set_error(out_error, "falha ao pedir redimensionamento de tela");
+        return false;
+    }
+
+    /* De propósito, não atualiza rfb->screen aqui: o parser da própria lib sobrescreve
+     * client->screen quando a resposta do servidor chega (rfbclient.c ~linha 2166) — a
+     * resposta ecoada é a fonte de verdade, não o que a gente pediu. */
+
+    /* Testado ao vivo contra o TigerVNC real: o SetDesktopSize sozinho não basta — o
+     * servidor aplica o resize (confirmado via xrandr), mas não empurra nada de volta
+     * sozinho depois. O pedido incremental que já estava em andamento antes disso era pra
+     * área antiga (que deixou de existir), e o servidor não reage a ele pra área nova —
+     * fica esperando um pedido novo, explícito, na área nova. Como as duas mensagens vão
+     * na mesma conexão TCP, o servidor processa em ordem: quando ler este pedido, o resize
+     * de cima já foi aplicado (diferente da tentativa anterior, que mandava isso ANTES do
+     * resize ser aceito, e por isso batia "exceeds framebuffer"). */
+    if (!SendFramebufferUpdateRequest(rfb, 0, 0, width, height, FALSE)) {
+        set_error(out_error, "falha ao pedir atualização depois do redimensionamento");
+        return false;
+    }
+
     return true;
 }
 
@@ -170,7 +295,12 @@ void vnc_client_send_pointer(VncClient *client, int x, int y, int button_mask) {
     if (!client) {
         return;
     }
-    SendPointerEvent(client->rfb, x, y, button_mask);
+    if (!SendPointerEvent(client->rfb, x, y, button_mask)) {
+        /* write() falhou — a conexão provavelmente caiu. Não propaga erro daqui (a
+         * assinatura é void, decisão de manter a chamada simples pro chamador); o watch de
+         * G_IO_HUP/G_IO_ERR no fd (main.c) ainda vai pegar a queda de conexão sozinho. */
+        rfbClientLog("kindow: falha ao mandar PointerEvent, conexão provavelmente caiu\n");
+    }
 }
 
 void vnc_client_disconnect(VncClient *client) {

@@ -32,27 +32,34 @@ como inferência.
   `SetFormatAndEncodings`) copiada da função interna `rfbInitConnection` da própria lib
   (`vendor/libvncserver/src/libvncclient/vncviewer.c`, não exportada — por isso reimplementada).
 
-## Integração com o loop principal do GTK2 — mais simples do que o previsto
+## Integração com o loop principal do GTK — `GIOChannel`/`g_io_add_watch`
 
 `client->sock` é um file descriptor POSIX comum (`#define rfbSocket int` em Linux) — dá pra
-integrar sem sacrifício, **se** a conexão fosse persistente.
+integrar sem sacrifício, **se** a conexão for persistente.
 
 Duas abordagens foram cogitadas originalmente pra uma conexão de longa duração:
-1. **`g_io_add_watch()` no fd, single-thread** — evita threading com GTK2 (história frágil de
+1. **`g_io_add_watch()` no fd, single-thread** — evita threading com GTK (história frágil de
    `gdk_threads_enter/leave`).
 2. **Thread dedicada** — o que o Remmina faz de verdade em produção, mais robusto mas mais
    complexo (lock/fila).
 
-**Decisão final, mais simples que as duas acima**: como o modelo de conexão do projeto é
-reconectar do zero a cada interação (decisão em `rfb-protocol.md` — nunca manter socket ocioso),
-cada round-trip é curto (handshake + um `FramebufferUpdateRequest`), então **nem g_io_add_watch
-nem thread dedicada foram necessários** — `vnc_client_fetch_frame()` simplesmente bloqueia a
-thread principal do GTK por até 5s dentro do próprio handler do clique/botão
-(`WaitForMessage`+`HandleRFBServerMessage` num loop com timeout). A janela fica sem responder a
-eventos durante esse tempo, mas como cada interação já é uma reconexão completa e curta, isso é
-uma troca aceitável pra uma PoC — bem mais simples de raciocinar que gerenciar um watch
-assíncrono ou uma thread só pra ganhar responsividade durante um popup de ~1-2s. Revisitar só se
-isso se mostrar um problema real de UX no hardware.
+**Decisão original desta pesquisa (revisada — ver abaixo)**: como o modelo de conexão do
+projeto era reconectar do zero a cada interação (decisão original em `rfb-protocol.md` — nunca
+manter socket ocioso), cada round-trip seria curto, então nem `g_io_add_watch` nem thread
+dedicada pareciam necessários — a busca de frame bloquearia a thread principal do GTK por um
+tempo curto dentro do próprio handler de clique.
+
+**Revisão (teste em hardware real)**: o modelo de conexão mudou pra persistente (custo real de
+reconectar medido em ~1-2s por burst vazio do TigerVNC — Achado #2 de
+[`kindle-hardware-test.md`](kindle-hardware-test.md)), o que faz a primeira abordagem cogitada
+acima ser exatamente a certa: `vnc_client_get_fd()` expõe o fd já conectado, e o app registra ele
+no loop do GTK via `GIOChannel`/`g_io_add_watch()` (`g_unix_fd_add()` seria mais direto, mas não
+existe no glib vendorizado nesse sysroot — confirmado em runtime, não achado em doc). A cada
+sinal de leitura no fd, o app chama `vnc_client_handle_messages()`; a própria `libvncclient`
+dispara o próximo pedido incremental sozinha internamente, então não há loop de polling nem
+thread dedicada — o watch só existe pra não bloquear a UI enquanto espera a próxima mudança de
+tela, que pode nunca vir. Mais simples que a thread dedicada do Remmina, mas não tão trivial
+quanto "nem watch nem thread" cogitado quando o modelo ainda era reconectar por interação.
 
 ## Entrada (toque → clique/tecla)
 
@@ -176,12 +183,20 @@ surpresa pra decidir depois.
 4. ~~`rfbGetClient(8,3,4)` → conectar → `MallocFrameBuffer`/`FinishedFrameBufferUpdate` →
    pedir e esperar atualização~~ — **feito**: implementado em
    [`app/src/vnc_client.c`](../../app/src/vnc_client.c) (módulo isolado, ver princípio de
-   isolamento na seção "O que já decidimos" do README). Fetch síncrono, não `g_io_add_watch`
-   (ver seção de integração com GTK2 acima — decisão mudou depois que o modelo de reconexão por
-   interação ficou claro).
+   isolamento na seção "O que já decidimos" do README). Fluxo atual (conexão persistente):
+   `vnc_client_connect()` → `vnc_client_get_fd()` (registrado no loop do GTK via
+   `GIOChannel`/`g_io_add_watch`, ver seção de integração acima) → `vnc_client_start_updates()`
+   uma única vez → `vnc_client_handle_messages()` a cada sinal de leitura no fd →
+   `vnc_client_disconnect()` ao encerrar.
 5. ~~`SendPointerEvent` com toque~~ — **feito**: `vnc_client_send_pointer()`, usado em
    [`app/src/main.c`](../../app/src/main.c) pra traduzir clique na `GtkDrawingArea` em
    `PointerEvent`. `SendKeyEvent`/`keysym.h` **ainda não implementado** — a PoC atual só cobre
    toque, não teclado (não era o foco do "minimamente usável" inicial).
-6. Lembrar: GPLv2 se propaga pro projeto inteiro no momento de distribuir binário — planejar
+6. ~~Resize automático pra bater com a resolução real de qualquer Kindle~~ — **feito**:
+   `vnc_client_request_desktop_size()`, extensão RFB `SetDesktopSize`/`ExtDesktopSize`. Três
+   bugs reais na lib vendorizada foram encontrados e contornados nesse processo (endianTest não
+   inicializado, `SendExtDesktopSize()` com campos não preenchidos, parser de resposta
+   descartando `screen.id==0`) — detalhe completo em
+   [`kindle-hardware-test.md`](kindle-hardware-test.md).
+7. Lembrar: GPLv2 se propaga pro projeto inteiro no momento de distribuir binário — planejar
    código aberto desde já, não como decisão de última hora.

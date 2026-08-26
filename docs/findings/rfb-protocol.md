@@ -88,11 +88,26 @@ protocolo — visto do lado do servidor, é indistinguível de um cliente "lento
   a associação** enquanto o device fica parado entre toques do usuário — isso é problema do lado
   do cliente, não do protocolo.
 
-**Recomendação prática**: reconectar do zero (TCP + handshake completo) a cada interação do
-usuário, em vez de tentar manter um socket vivo indefinidamente durante longos períodos ocioso.
-Como o handshake é barato (poucos round-trips, sem custo de autenticação já que usamos `None`),
-reconectar por interação é mais simples e robusto que gerenciar conexão ociosa de longa duração —
-e evita de vez a incerteza sobre comportamento de timeout de cada servidor.
+**Recomendação prática (original desta pesquisa)**: reconectar do zero (TCP + handshake completo)
+a cada interação do usuário, em vez de tentar manter um socket vivo indefinidamente durante longos
+períodos ocioso. Como o handshake é barato (poucos round-trips, sem custo de autenticação já que
+usamos `None`), reconectar por interação é mais simples e robusto que gerenciar conexão ociosa de
+longa duração — e evita de vez a incerteza sobre comportamento de timeout de cada servidor.
+
+**Revisão (teste em hardware real)**: essa recomendação foi revisada depois de medir o custo real
+de reconectar — o TigerVNC manda um primeiro burst vazio em toda conexão nova, e só ~1-2s depois
+vem o conteúdo de verdade (Achado #2 de
+[`kindle-hardware-test.md`](kindle-hardware-test.md)), o que tornava reconectar a cada interação
+caro na prática, não barato como estimado aqui. O modelo atual é **conexão persistente**: conecta
+uma vez, chama `vnc_client_start_updates()` uma vez, e a própria `libvncclient` mantém sozinha um
+pedido incremental sempre em andamento (`HandleRFBServerMessage` chama
+`SendIncrementalFramebufferUpdateRequest` internamente depois de cada `FramebufferUpdate` —
+`rfbclient.c` ~linha 2564) — o servidor só responde quando o conteúdo muda, então continua sendo
+push de verdade, não polling, compatível com a decisão de atualização sob demanda acima. O risco
+original que motivou "reconectar por interação" (WiFi do Kindle dormindo e derrubando a conexão
+ociosa) continua real, só que tratado de outro jeito: reconexão automática com timer de 2s se a
+conexão cair, em vez de reconectar preventivamente a cada interação. Detalhe completo em
+[`kindle-hardware-test.md`](kindle-hardware-test.md).
 
 ## Resumo das decisões
 
@@ -101,8 +116,8 @@ e evita de vez a incerteza sobre comportamento de timeout de cada servidor.
 | Segurança | `None` |
 | Formato de pixel | Aceitar padrão do servidor, converter pra cinza/dither no cliente |
 | Encoding | `Raw` (+ `CopyRect` opcional) |
-| Modelo de atualização | Sob demanda, por ação do usuário — é o design nativo do RFB |
-| Ciclo de vida da conexão | Reconectar a cada interação, não manter socket ocioso |
+| Modelo de atualização | Sob demanda (push do protocolo quando o conteúdo muda) — é o design nativo do RFB |
+| Ciclo de vida da conexão | ~~Reconectar a cada interação~~ **Revisado**: conexão persistente, pedido incremental sempre em andamento; reconecta só se a conexão cair (ver seção acima) |
 
 ## Superfície de API do `libvncclient` que vamos usar
 

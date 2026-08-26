@@ -27,19 +27,19 @@ servidor X que já existe (Xlib, Xext, Xdamage...); a do TigerVNC inclui coisas 
 **Não instalar `xfce4`/`xfce4-goodies`** — isso é ambiente de desktop completo, muita coisa
 desnecessária pra essa PoC.
 
-## O que expor: um `xterm` sozinho, sem gerenciador de janelas
+## O que expor: um `xterm`, sob `matchbox-window-manager`
 
-Rodar X sem WM é um padrão real e comum (é como praticamente todo setup headless de CI/browser
-automatizado funciona) — funciona bem quando é **um único app, sempre em tela cheia**, que é
-exatamente nosso caso. Os problemas documentados de "sem WM" (sem decoração de janela, sem jeito
-de redimensionar interativamente) só aparecem quando tem mais de uma janela ou quando um app
-espera o WM responder a protocolos de foco/redimensionamento — não é nosso caso agora.
+Decisão original desta pesquisa: rodar X sem WM, um único `xterm` sempre em tela cheia — padrão
+real e comum (é como praticamente todo setup headless de CI/browser automatizado funciona).
 
-Se no futuro precisarmos de mais de um app ou reposicionamento interativo, o candidato certo é o
-**`matchbox-window-manager`** — feito especificamente pra "plataformas embarcadas sem desktop:
-handhelds, quiosques" com uma janela por vez, em tela cheia. Bate muito com o formato do nosso
-cliente (touch, um app por vez). Não instalar agora, só registrado como próximo passo natural se
-precisarmos.
+**Revisado em 26/08**: sem WM, o `-fullscreen` do `xterm` não era de fato aplicado (sobrava fundo
+preto do X ao redor) — o item ficou registrado como pendência no README até então. Resolvido
+instalando o **`matchbox-window-manager`** (`apt install matchbox-window-manager`) — feito
+especificamente pra "plataformas embarcadas sem desktop: handhelds, quiosques" com uma janela por
+vez, em tela cheia, o que bate exatamente com o formato do nosso cliente (touch, um app por vez).
+Com o WM presente, o `-fullscreen` do `xterm` passa a preencher a tela de verdade, e acompanha o
+resize automático do frame (ver `SetDesktopSize` em
+[`kindle-hardware-test.md`](kindle-hardware-test.md)).
 
 Descartado: expor um console de texto puro em vez de X11 — VNC/RFB é fundamentalmente sobre
 compartilhar um framebuffer de tela gráfica; não é um modo padrão de nenhum dos dois servidores
@@ -89,6 +89,18 @@ cat > ~/.config/tigervnc/xstartup << 'EOF'
 exec xterm -geometry 100x30+0+0 -fullscreen
 EOF
 chmod +x ~/.config/tigervnc/xstartup
+```
+
+**Atualizado em 26/08** com `matchbox-window-manager` (ver seção acima) e fonte TrueType
+configurável (`-fa`/`-fs`, resolvendo o texto pequeno em relação à tela do Kindle — tamanho 18
+como ponto de partida, ajustável), rodando o WM antes do `xterm`:
+
+```bash
+cat > ~/.config/tigervnc/xstartup << 'EOF'
+#!/bin/sh
+matchbox-window-manager &
+exec xterm -fa 'DejaVu Sans Mono' -fs 18 -fullscreen
+EOF
 ```
 
 ## Pegadinha real: TigerVNC 1.15+ mudou como interpreta o `xstartup`
@@ -159,6 +171,5 @@ Pontos importantes desse unit:
 
 ## Resumo da decisão
 
-TigerVNC (`Xvnc`) + `xterm` sozinho, sem WM, unit `systemd` própria seguindo o padrão já
-estabelecido no projeto `kindle`. `matchbox-window-manager` fica anotado como upgrade natural se
-precisarmos de mais de um app depois — não instalado agora.
+TigerVNC (`Xvnc`) + `xterm` sob `matchbox-window-manager` (revisão de 26/08 — ver seção "O que
+expor" acima), unit `systemd` própria seguindo o padrão já estabelecido no projeto `kindle`.
