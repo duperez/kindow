@@ -21,26 +21,38 @@ como inferência.
   é caro/feio visualmente.
 - **Existe um caminho alternativo** (`GotBitmap`/`GotFillRect`) pra quem quer compor a tela
   manualmente — não precisamos, o caminho simples acima já serve.
-- **Conectar**: usar `rfbClientConnect()` + `rfbClientInitialise()` separados (não
+- **Conectar**: usar `ConnectToRFBServer()` + `InitialiseRFBConnection()` separados (não
   `rfbInitClient()`, que é pensado pra receber `argv` de CLI — nosso host vem de outro lugar,
-  não de linha de comando).
+  não de linha de comando). **Correção em relação ao rascunho original desta pesquisa**: os
+  nomes reais na API são esses dois, não `rfbClientConnect`/`rfbClientInitialise` (que não
+  existem) — confirmado direto no header vendorizado
+  (`vendor/libvncserver/include/rfb/rfbclient.h`) e implementado em
+  [`app/src/vnc_client.c`](../../app/src/vnc_client.c), com a sequência completa
+  (`ConnectToRFBServer` → `InitialiseRFBConnection` → `MallocFrameBuffer` →
+  `SetFormatAndEncodings`) copiada da função interna `rfbInitConnection` da própria lib
+  (`vendor/libvncserver/src/libvncclient/vncviewer.c`, não exportada — por isso reimplementada).
 
-## Integração com o loop principal do GTK2
+## Integração com o loop principal do GTK2 — mais simples do que o previsto
 
 `client->sock` é um file descriptor POSIX comum (`#define rfbSocket int` em Linux) — dá pra
-integrar sem sacrifício.
+integrar sem sacrifício, **se** a conexão fosse persistente.
 
-Duas abordagens reais encontradas:
-1. **`g_io_add_watch()` no fd, single-thread** — a recomendada pra nós. Simples, sem lock, sem
-   marshaling entre threads pra atualizar o framebuffer. GTK2 tem uma história frágil com
-   threading (`gdk_threads_enter/leave`), então evitar multi-thread é a escolha mais segura por
-   padrão.
-2. **Thread dedicada** — é o que o Remmina faz de verdade em produção (loop bloqueante numa
-   `pthread`, resultado repassado pra UI via mutex + `g_idle_add`). Mais robusto contra
-   `HandleRFBServerMessage` bloquear a UI, mas mais complexo (temos que gerenciar lock/fila).
+Duas abordagens foram cogitadas originalmente pra uma conexão de longa duração:
+1. **`g_io_add_watch()` no fd, single-thread** — evita threading com GTK2 (história frágil de
+   `gdk_threads_enter/leave`).
+2. **Thread dedicada** — o que o Remmina faz de verdade em produção, mais robusto mas mais
+   complexo (lock/fila).
 
-**Decisão**: começar com `g_io_add_watch` (opção 1). Só migrar pra thread dedicada se
-percebermos travamento de UI na prática — não assumir isso de antemão.
+**Decisão final, mais simples que as duas acima**: como o modelo de conexão do projeto é
+reconectar do zero a cada interação (decisão em `rfb-protocol.md` — nunca manter socket ocioso),
+cada round-trip é curto (handshake + um `FramebufferUpdateRequest`), então **nem g_io_add_watch
+nem thread dedicada foram necessários** — `vnc_client_fetch_frame()` simplesmente bloqueia a
+thread principal do GTK por até 5s dentro do próprio handler do clique/botão
+(`WaitForMessage`+`HandleRFBServerMessage` num loop com timeout). A janela fica sem responder a
+eventos durante esse tempo, mas como cada interação já é uma reconexão completa e curta, isso é
+uma troca aceitável pra uma PoC — bem mais simples de raciocinar que gerenciar um watch
+assíncrono ou uma thread só pra ganhar responsividade durante um popup de ~1-2s. Revisitar só se
+isso se mostrar um problema real de UX no hardware.
 
 ## Entrada (toque → clique/tecla)
 
@@ -57,10 +69,11 @@ uma tabelinha de tradução (mesmo padrão que os exemplos oficiais da lib usam)
 
 ## Build mínimo (dependência)
 
-Confirmado direto no `CMakeLists.txt`:
+Flags testadas de verdade num cross-compile real (`LibVNCServer-0.9.15`, a release estável mais
+recente, vendorizada como submódulo em `vendor/libvncserver`):
 
 ```
--DWITH_LIBVNCSERVER=OFF -DWITH_LIBVNCCLIENT=ON   # só cliente, sem servidor
+-DWITH_LIBVNCSERVER=OFF -DWITH_LIBVNCCLIENT=ON
 -DWITH_GCRYPT=OFF -DWITH_OPENSSL=OFF -DWITH_GNUTLS=OFF   # sem crypto/TLS externo
 -DWITH_JPEG=OFF -DWITH_PNG=OFF                            # Raw-only não precisa
 -DWITH_SDL=OFF -DWITH_GTK=OFF -DWITH_QT=OFF -DWITH_FFMPEG=OFF -DWITH_LIBSSHTUNNEL=OFF
@@ -68,38 +81,77 @@ Confirmado direto no `CMakeLists.txt`:
 -DWITH_EXAMPLES=OFF -DWITH_TESTS=OFF
 ```
 
+**Correção importante em relação ao que a pesquisa por texto tinha achado**: nessa versão
+(0.9.15), `WITH_LIBVNCSERVER`/`WITH_LIBVNCCLIENT` **não existem** como `option()` no
+`CMakeLists.txt` — só ficam como cache "UNINITIALIZED" sem efeito nenhum (confirmado via
+`grep`/`CMakeCache.txt`). O `add_library(vncserver ...)` roda incondicionalmente. Na prática:
+**as duas libs (`vncclient` e `vncserver`) sempre buildam juntas** nessa versão, não tem como
+compilar só o cliente. Não é um problema real pro projeto — nosso app só linka `vncclient`, o
+`vncserver.so` fica parado no sysroot sem nunca ir pro binário final do Kindle — mas é importante
+saber que a flag não faz o que o nome sugere.
+
 Com `WITH_GCRYPT`/`WITH_OPENSSL` desligados, a lib cai automaticamente pra uma implementação
-própria embutida de SHA1/DES (`crypto_included.c`) — zero dependência externa de crypto, o
-suficiente pro `VNC Authentication` (não que a gente vá usar, decidimos `None` no achado do
-protocolo RFB). Com `WITH_JPEG=OFF`, confirmado que o único arquivo que toca libjpeg
-(`turbojpeg.c`) simplesmente não entra no build — seguro de desligar já que vamos usar só
-encoding `Raw`.
+própria embutida de SHA1/DES (`crypto_included.c`) — zero dependência externa de crypto.
 
 **Achado importante**: `WITH_GTK` nesse CMakeLists controla só se o **exemplo** `gtkvncviewer` é
-compilado — a biblioteca `vncclient` em si **não linka GTK em nenhum lugar**. Ou seja, não
-precisamos de headers de desenvolvimento do GTK2 no sysroot só pra compilar essa dependência.
+compilado — a biblioteca `vncclient` em si **não linka GTK em nenhum lugar**. Não precisamos de
+headers de desenvolvimento do GTK2 no sysroot só pra compilar essa dependência.
 
-Sobra basicamente só o **zlib** como dependência externa real (miniLZO/crypto/D3DES vêm sempre
-embutidos, não dá pra tirar mesmo desligando a flag).
+**Zlib confirmado já presente no sysroot** (extraído do firmware do Kindle via KMC SDK,
+independente desse build) — realmente sobra só ele como dependência externa real, como a
+pesquisa original já apontava, agora confirmado por teste e não só por leitura do CMakeLists.
 
-## Cross-compilation
+## Cross-compilation — feito e testado
 
-O projeto já usa Meson + toolchain Koxtoolchain via Docker (ver `kindle/docs/findings/gtk-toolchain-setup.md`),
-mas `libvncclient` usa CMake — precisamos escrever um toolchain file próprio de CMake, seguindo o
-mesmo padrão do arquivo de exemplo que o próprio repositório já traz pra MinGW
-(`cmake/Toolchain-cross-mingw32-linux.cmake`), só trocando o compilador/sysroot alvo pro nosso
-`arm-kindlehf-linux-gnueabihf`.
+Toolchain file em [`cmake/Toolchain-arm-kindlehf-linux-gnueabihf.cmake`](../../cmake/Toolchain-arm-kindlehf-linux-gnueabihf.cmake),
+espelhando o `meson-crosscompile.txt` do projeto `kindle` (mesmo compilador/sysroot,
+`arm-kindlehf-linux-gnueabihf`).
 
-**Precedente real encontrado**: o `hwhw/kindlevncviewer` usa a mesma família de toolchain
-(koxtoolchain) com sucesso em hardware Kindle real — confirma que a combinação
-"koxtoolchain + libvncclient" funciona nesse tipo de device. Só não dá pra copiar a receita
-literal dele — o projeto compila os `.c` na mão em vez de usar CMake, e a base de código dele
-hoje é Lua/LuaJIT, não C puro.
+**Precedente real encontrado na pesquisa**: o `hwhw/kindlevncviewer` usa a mesma família de
+toolchain (koxtoolchain) com sucesso em hardware Kindle real. Não dava pra copiar a receita
+literal dele (compila os `.c` na mão, base de código hoje é Lua/LuaJIT) — mas agora temos nossa
+própria receita CMake testada.
 
-Depois de compilar e instalar no sysroot, o `libvncclient.pc` (arquivo pkg-config que o próprio
-CMake gera) deve deixar o Meson encontrar a lib via `dependency('libvncclient')`, desde que
-`PKG_CONFIG_SYSROOT_DIR`/`PKG_CONFIG_PATH` no cross-file do Meson apontem pro sysroot certo —
-mecanismo padrão, ainda não confirmado contra nosso `meson-crosscompile.txt` real.
+**Passo a passo real, executado dentro do container `kindle-toolchain`** (mesmo container do
+projeto `kindle`, com `cmake` instalado nele e um mount novo `-v
+/Users/eduardoperez/projects/kindow:/kindow` adicionado — ver `docker run` na seção de setup):
+
+```sh
+# dentro do container, como usuário builder
+cd /kindow/vendor/libvncserver
+cmake -B build -S . \
+  -DCMAKE_TOOLCHAIN_FILE=/kindow/cmake/Toolchain-arm-kindlehf-linux-gnueabihf.cmake \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/home/builder/x-tools/arm-kindlehf-linux-gnueabihf/arm-kindlehf-linux-gnueabihf/sysroot/usr \
+  -DWITH_LIBVNCSERVER=OFF -DWITH_LIBVNCCLIENT=ON \
+  -DWITH_GCRYPT=OFF -DWITH_OPENSSL=OFF -DWITH_GNUTLS=OFF \
+  -DWITH_JPEG=OFF -DWITH_PNG=OFF \
+  -DWITH_SDL=OFF -DWITH_GTK=OFF -DWITH_QT=OFF -DWITH_FFMPEG=OFF -DWITH_LIBSSHTUNNEL=OFF \
+  -DWITH_SASL=OFF -DWITH_XCB=OFF -DWITH_SYSTEMD=OFF -DWITH_WEBSOCKETS=OFF \
+  -DWITH_EXAMPLES=OFF -DWITH_TESTS=OFF \
+  -DBUILD_SHARED_LIBS=ON
+cmake --build build -j$(nproc)
+sudo cmake --install build   # sudo só pra escrever no sysroot dentro do container
+```
+
+Confirmado que o resultado é um binário ARM de verdade, não do host:
+```
+$ file .../sysroot/usr/lib/libvncclient.so.0.9.15
+ELF 32-bit LSB shared object, ARM, EABI5 version 1 (SYSV), dynamically linked, ...
+```
+
+E que o `.pc` gerado funciona de ponta a ponta — um programa mínimo (`rfbGetClient` +
+`rfbClientCleanup`) compilou e linkou com sucesso via `pkg-config --cflags --libs libvncclient`,
+gerando outro binário ARM válido. Isso confirma que quando o Meson do app GTK do Kindle apontar
+`PKG_CONFIG_SYSROOT_DIR`/`PKG_CONFIG_LIBDIR` pro mesmo sysroot (mesmo mecanismo que o
+`pkg_config_libdir` do `meson-crosscompile.txt` já usa pras deps do projeto `kindle`), ele vai
+achar `libvncclient` via `dependency('libvncclient')` sem trabalho extra.
+
+**Importante sobre reprodutibilidade**: o resultado do build (lib instalada no sysroot) vive só
+dentro do filesystem do container Docker `kindle-toolchain`, não no repositório git. Se o
+container for destruído, os comandos acima recriam o mesmo resultado a partir do submódulo
+(`vendor/libvncserver`, pinado no commit da tag `LibVNCServer-0.9.15`) + do toolchain file — não
+precisa refazer nenhuma decisão, só rerodar.
 
 ## Licença — importante pro "manter público depois"
 
@@ -114,15 +166,22 @@ surpresa pra decidir depois.
 
 ## Checklist de setup
 
-1. Build mínimo do CMake (seção acima) → só zlib como dependência externa real.
-2. Toolchain file de CMake próprio, pro nosso `arm-kindlehf-linux-gnueabihf`, modelado no exemplo
-   de MinGW que o repositório já traz.
-3. Instalar lib + headers + `.pc` no mesmo sysroot que o Meson já usa; apontar
-   `PKG_CONFIG_SYSROOT_DIR`/`PKG_CONFIG_PATH` no cross-file.
-4. `rfbGetClient(8,3,4)` → setar `MallocFrameBuffer`/`GotFrameBufferUpdate` →
-   `rfbClientConnect`+`rfbClientInitialise` → `g_io_add_watch` no `client->sock` integrado ao
-   loop do GTK2, chamando `HandleRFBServerMessage` quando tiver dado pra ler.
-5. `SendPointerEvent`/`SendKeyEvent` com constantes `XK_*` do `keysym.h` — ASCII direto pra
-   caracteres imprimíveis, tabela pequena só pras teclas especiais.
+1. ~~Build mínimo do CMake~~ — **feito**: só zlib como dependência externa real (confirmado, já
+   presente no sysroot do firmware).
+2. ~~Toolchain file de CMake próprio~~ — **feito**:
+   [`cmake/Toolchain-arm-kindlehf-linux-gnueabihf.cmake`](../../cmake/Toolchain-arm-kindlehf-linux-gnueabihf.cmake).
+3. ~~Instalar lib + headers + `.pc` no sysroot~~ — **feito e testado**: `libvncclient.so`/headers/
+   `libvncclient.pc` instalados no sysroot compartilhado com o Meson do projeto `kindle`; um
+   programa mínimo compilou e linkou com sucesso via `pkg-config`.
+4. ~~`rfbGetClient(8,3,4)` → conectar → `MallocFrameBuffer`/`FinishedFrameBufferUpdate` →
+   pedir e esperar atualização~~ — **feito**: implementado em
+   [`app/src/vnc_client.c`](../../app/src/vnc_client.c) (módulo isolado, ver princípio de
+   isolamento na seção "O que já decidimos" do README). Fetch síncrono, não `g_io_add_watch`
+   (ver seção de integração com GTK2 acima — decisão mudou depois que o modelo de reconexão por
+   interação ficou claro).
+5. ~~`SendPointerEvent` com toque~~ — **feito**: `vnc_client_send_pointer()`, usado em
+   [`app/src/main.c`](../../app/src/main.c) pra traduzir clique na `GtkDrawingArea` em
+   `PointerEvent`. `SendKeyEvent`/`keysym.h` **ainda não implementado** — a PoC atual só cobre
+   toque, não teclado (não era o foco do "minimamente usável" inicial).
 6. Lembrar: GPLv2 se propaga pro projeto inteiro no momento de distribuir binário — planejar
    código aberto desde já, não como decisão de última hora.

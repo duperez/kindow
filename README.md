@@ -69,14 +69,28 @@ As três frentes de pesquisa terminaram, cada uma com decisões concretas regist
    sozinho (sem WM) rodando via unit `systemd` (`vnc-kindle.service`), acessado com sucesso a
    partir de um cliente VNC nativo no Mac. Achados reais de RAM e uma pegadinha de versão do
    TigerVNC 1.15 registrados em [`pi-vnc-server.md`](docs/findings/pi-vnc-server.md).
-2. Escrever o toolchain file de CMake pro `arm-kindlehf-linux-gnueabihf` e cross-compilar o
-   `libvncclient` dentro do container Docker do toolchain (reaproveitado do projeto `kindle`).
-3. Escrever o app GTK do Kindle: módulo de integração com `libvncclient` isolado (conforme
-   princípio de isolamento já decidido), conectar, desenhar o framebuffer recebido via Cairo,
-   traduzir toque em `PointerEvent`.
-4. Testar ponta a ponta no hardware real (Kindle ↔ Pi).
+2. ~~Escrever o toolchain file de CMake e cross-compilar o `libvncclient`~~ — **feito e
+   testado**: toolchain file em [`cmake/`](cmake/), `libvncclient` vendorizado como submódulo
+   ([`vendor/libvncserver`](vendor/libvncserver), pinado em `LibVNCServer-0.9.15`), buildado
+   dentro do container `kindle-toolchain` e instalado no sysroot compartilhado — confirmado com
+   um programa mínimo que compilou e linkou de verdade contra a lib cross-compilada. Achados e
+   uma correção importante (as flags `WITH_LIBVNCSERVER`/`WITH_LIBVNCCLIENT` não existem nessa
+   versão) registrados em [`libvncclient-api.md`](docs/findings/libvncclient-api.md).
+3. ~~Escrever o app GTK do Kindle~~ — **escrito, cross-compilado, revisado e com teste
+   unitário**: [`app/`](app/) — módulo isolado `vnc_client.c`/`.h` (único lugar que fala com
+   `libvncclient`), `main.c` com uma `GtkDrawingArea` + botão "Atualizar", tocar na imagem manda
+   um `PointerEvent` e busca o resultado. Conversão de pixel pra escala de cinza extraída num
+   módulo puro (`pixel_convert.c`) com 10 casos de teste unitário. Binário ARM final confirmado
+   linkando certo contra `libgtk-x11-2.0`, `libcairo` e `libvncclient`. Falta só o teste no
+   hardware de verdade (próximo item).
+4. Testar ponta a ponta no hardware real (Kindle ↔ Pi) — ainda não feito.
 
 ## Estrutura do repositório
 
 - `docs/findings/` — achados técnicos, um arquivo por problema/solução (mesmo padrão do
   projeto `kindle`).
+- `app/` — o cliente GTK do Kindle (`src/main.c`, módulo isolado `src/vnc_client.c`/`.h`,
+  `src/pixel_convert.c` testável, `tests/`, `meson.build`).
+- `cmake/` — toolchain file de CMake pro cross-compile do `libvncclient`.
+- `vendor/libvncserver` — submódulo git do `libvncclient` (LibVNC/libvncserver), pinado numa
+  release estável.
