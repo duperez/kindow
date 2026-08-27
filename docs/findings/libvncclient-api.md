@@ -121,7 +121,7 @@ própria receita CMake testada.
 
 **Passo a passo real, executado dentro do container `kindle-toolchain`** (mesmo container do
 projeto `kindle`, com `cmake` instalado nele e um mount novo `-v
-/Users/eduardoperez/projects/kindow:/kindow` adicionado — ver `docker run` na seção de setup):
+<caminho-local-deste-repo>:/kindow` adicionado — ver `docker run` na seção de setup):
 
 ```sh
 # dentro do container, como usuário builder

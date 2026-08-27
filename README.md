@@ -1,246 +1,151 @@
 # Kindow
 
-Prova de conceito: transformar um Kindle jailbreakado numa tela sem fio pro Raspberry Pi, via
-VNC — toque na tela do Kindle vira entrada remota, atualização de tela sob demanda (não tem
-como um e-ink aguentar refresh contínuo).
+Transforma um Kindle jailbreakado numa **tela de toque sem fio pra um Raspberry Pi**, via
+VNC: o desktop do Pi aparece no e-ink do Kindle, e o toque na tela vira mouse/teclado de
+volta — com atualização de tela só quando o conteúdo muda de verdade (um e-ink não
+aguentaria refresh contínuo, e o protocolo RFB já é sob demanda por design).
 
-**Status: PoC provada ponta a ponta no hardware real.** Texto digitado no Pi aparece no Kindle
-automaticamente (conexão persistente com push do protocolo, sem botão/ação manual), e toque no
-Kindle manda entrada real de volta pro Pi (confirmado: um clique deu foco no `xterm`, cursor
-ficou visível). A tela remota se redimensiona sozinha pra bater 1:1 com a resolução real do
-Kindle que conectar. Detalhes de tudo que precisou ser corrigido pra chegar lá em
-[`kindle-hardware-test.md`](docs/findings/kindle-hardware-test.md).
+**Status**: funcional de ponta a ponta em hardware real (Kindle KT5 + Raspberry Pi).
+Nasceu como prova de conceito e ainda tem cara de PoC em vários cantos — mas o ciclo
+completo (conectar, ver, tocar, digitar, arrastar) está validado no device físico.
 
-## Contexto
+## O que ele faz hoje
 
-Nasceu de uma investigação dentro do projeto [`kindle`](../kindle/) (o painel/dashboard que
-roda no mesmo device) — ao pesquisar como o Kindle poderia servir de tela ocasional pro Pi,
-avaliamos alguns projetos de VNC pra Kindle já existentes e nenhum se encaixava bem: uns não
-eram VNC interativo de verdade (só empurravam imagem estática), outros miravam hardware/API
-antiga (`einkfb`, não `mxcfb` — a API que esse Kindle usa), e o mais sério tecnicamente
-(`kindlevncviewer`) exigiria portar a camada de desenho pra API certa sem garantia de qualidade
-do código original.
+- **Desktop remoto interativo**: a sessão X do Pi (Openbox + tint2 + apps GTK)
+  renderizada 1:1 no Kindle — a resolução remota se ajusta sozinha à tela de qualquer
+  Kindle que conectar (`SetDesktopSize`), sem escala nem corte.
+- **Toque = mouse**: toque vira clique esquerdo; a página de símbolos do teclado tem
+  teclas dedicadas de clique **Esquerdo** (sticky — arma um clique contínuo/arrasto real,
+  que termina quando o dedo levanta) e **Direito**.
+- **Teclado virtual** com sticky Shift/Ctrl (chords tipo Ctrl+C funcionam sem
+  multi-touch) e página de símbolos.
+- **Barra fixa** no rodapé: scroll ↑/↓ (quantidade de "catracas" por toque ajustável),
+  mostrar/esconder o teclado, e menu.
+- **Menu**: zoom remoto em 3 camadas independentes (conteúdo dos apps via Xft/DPI,
+  decoração de janela, painel), desconectar, status da conexão, sair.
+- **Tela de conexão**: histórico dos Pis já usados (toque pra reconectar), formulário
+  pra adicionar novo (IP/porta/senha), senha de VNC clássica suportada, e mensagens de
+  erro de verdade quando a conexão não vinga.
+- **Abre por toque** na biblioteca do Kindle (scriptlet "Kindow"), sem precisar de SSH.
 
-Virou projeto próprio porque deixou de ser exploração dentro do diário de bordo do `kindle` e
-passou a ter escopo e decisões de arquitetura já estabelecidas — não faz mais sentido misturar
-com aquele repositório.
+## Requisitos
 
-## O que já decidimos
+- **Kindle jailbreakado** com suporte a scriptlets (`.sh` tocável na biblioteca — o
+  mecanismo padrão do [jailbreak moderno](https://kindlemodding.org/)). Testado num KT5
+  (1072×1448); o layout é proporcional e deve se adaptar a outras resoluções, mas só o
+  KT5 foi validado.
+- **Raspberry Pi** (ou qualquer Linux Debian-like com `systemd`) na mesma rede, com SSH.
+- Pra compilar o cliente: o toolchain de cross-compilation do KindleModding
+  (koxtoolchain + KMC SDK) num container — ver "Compilando" abaixo.
 
-1. **Escopo mínimo da PoC**: no Pi, um servidor VNC maduro (`x11vnc` ou `TigerVNC`) expondo
-   algo simples (nem precisa ser um desktop completo — um terminal já prova o conceito). No
-   Kindle, um app GTK novo que conecta via TCP, faz o handshake RFB, recebe a tela e desenha
-   via Cairo numa janela normal. Toque vira `PointerEvent` mandado de volta pro servidor.
-   Atualização de tela **sob demanda** — o servidor só manda `FramebufferUpdate` quando o
-   conteúdo muda de verdade (push do protocolo, não polling), nunca em loop contínuo — decisão
-   de design pro hardware, não limitação da PoC. **Revisão**: originalmente isso era acionado
-   por um botão "Atualizar" explícito no app; hoje a conexão é persistente e o pedido
-   incremental fica sempre em andamento sozinho — ver "Próximos passos" e `rfb-protocol.md`.
-2. **Não portar um projeto VNC existente.** Decisão deliberada: em vez de adaptar um dos
-   projetos encontrados na pesquisa (qualidade/manutenção incertas), usar uma biblioteca madura
-   só pra parte de protocolo — `libvncclient` (projeto LibVNCServer, ativo, 2277+ commits) — e
-   escrever nós mesmos a camada de integração com o Kindle (Cairo, toque), que é a parte
-   realmente específica desse hardware.
-3. **Não precisa bypassar GTK/X11.** Diferente do que o KOReader faz pra desenhar direto no
-   framebuffer (`mxcfb`, contornando X11 inteiramente — investigado no projeto `kindle`, ver
-   [`../kindle/docs/findings/landscape-orientation-blocked.md`](../kindle/docs/findings/landscape-orientation-blocked.md)),
-   um cliente VNC só precisa desenhar pixels recebidos numa janela — isso o Cairo/GTK já fazem
-   nativamente. Reaproveita o toolchain de cross-compilation já validado no `kindle`
-   (Koxtoolchain + KMC SDK via Docker).
-4. **Princípio de isolamento**: todo código que fala diretamente com `libvncclient` fica isolado
-   num módulo próprio, com uma interface pequena e específica pro que a PoC precisa — não uma
-   arquitetura de plugins genérica pra trocar de biblioteca (isso resolveria um problema que não
-   temos ainda). O objetivo é não deixar a API de terceiro vazar pelo resto do código, não criar
-   camada de abstração especulativa.
+## Instalando
 
-## Pesquisa técnica — concluída
-
-As três frentes de pesquisa terminaram, cada uma com decisões concretas registradas em
-`docs/findings/`:
-
-- [`rfb-protocol.md`](docs/findings/rfb-protocol.md) — segurança `None`, formato de pixel padrão
-  do servidor com conversão pra cinza no cliente, encoding `ZRLE` (revisado de `Raw` em 26/08,
-  depois de medir ~155x menos bytes num scroll real e resolver um freeze do Enter),
-  confirmação de que atualização sob demanda é o próprio design nativo do protocolo (não um
-  "jeito de forçar"). A recomendação original de reconectar a cada interação foi **revisada**
-  depois do teste em hardware real — ver `kindle-hardware-test.md`: hoje o modelo é conexão
-  persistente com push automático da própria lib.
-- [`libvncclient-api.md`](docs/findings/libvncclient-api.md) — API mínima (`rfbGetClient` +
-  `MallocFrameBuffer`/`GotFrameBufferUpdate`), integração com o loop do GTK via
-  `GIOChannel`/`g_io_add_watch` (o fd do socket entra no loop assim que a conexão persistente
-  vira o modelo), build mínimo via CMake (só zlib como dependência externa real), toolchain de
-  cross-compile modelado no exemplo de MinGW do próprio repositório, e o achado importante de
-  licença: **GPLv2** — o projeto inteiro precisa ser open-source quando for publicado.
-- [`pi-vnc-server.md`](docs/findings/pi-vnc-server.md) — TigerVNC (`Xvnc`) em vez de `x11vnc`
-  (não depende de sessão X já rodando), expondo um `xterm` sob `matchbox-window-manager` (tela
-  cheia de verdade), unit `systemd` seguindo o padrão já usado no projeto `kindle`.
-- [`kindle-hardware-test.md`](docs/findings/kindle-hardware-test.md) — o teste ponta a ponta no
-  device físico e os bugs reais encontrados só nesse teste (o principal: `client->updateRect`
-  nunca inicializado, fazendo o framebuffer sempre chegar zerado), a investigação do resize
-  automático de tela (mais 3 bugs reais na lib vendorizada), latência medida no hardware,
-  mecânica de deploy no Kindle, e o esquema de título de janela que o window manager do Kindle
-  exige pra tela cheia.
-
-## Próximos passos
-
-1. ~~Configurar o TigerVNC de verdade no Pi~~ — **feito e testado**: `Xtigervnc` + `xterm` sob
-   `matchbox-window-manager` (tela cheia de verdade, revisão de 26/08) rodando via unit
-   `systemd` (`vnc-kindle.service`), acessado com sucesso a partir de um cliente VNC nativo no
-   Mac. Achados reais de RAM e uma pegadinha de versão do TigerVNC 1.15 registrados em
-   [`pi-vnc-server.md`](docs/findings/pi-vnc-server.md).
-2. ~~Escrever o toolchain file de CMake e cross-compilar o `libvncclient`~~ — **feito e
-   testado**: toolchain file em [`cmake/`](cmake/), `libvncclient` vendorizado como submódulo
-   ([`vendor/libvncserver`](vendor/libvncserver), pinado em `LibVNCServer-0.9.15`), buildado
-   dentro do container `kindle-toolchain` e instalado no sysroot compartilhado — confirmado com
-   um programa mínimo que compilou e linkou de verdade contra a lib cross-compilada. Achados e
-   uma correção importante (as flags `WITH_LIBVNCSERVER`/`WITH_LIBVNCCLIENT` não existem nessa
-   versão) registrados em [`libvncclient-api.md`](docs/findings/libvncclient-api.md).
-3. ~~Escrever o app GTK do Kindle~~ — **escrito, cross-compilado, revisado e com teste
-   unitário**: [`app/`](app/) — módulo isolado `vnc_client.c`/`.h` (único lugar que fala com
-   `libvncclient`), uma `GtkDrawingArea` como único filho direto da janela, tocar na imagem
-   manda um `PointerEvent`. Conversão de pixel pra escala de cinza extraída num módulo puro
-   (`pixel_convert.c`, com LUTs por canal + loops especializados por bpp) com 10 casos de
-   teste unitário. **Revisão (refactor Ports & Adapters leve, 26/08)**: a lógica que antes
-   morava em `main.c` foi separada em módulos — ver "Estrutura do repositório".
-4. ~~Testar ponta a ponta no hardware real~~ — **feito, funcionando**: texto digitado no Pi
-   aparece no Kindle, toque no Kindle interage de volta com o Pi. Vários bugs reais só visíveis
-   em hardware real foram encontrados e corrigidos nesse processo — ver
-   [`kindle-hardware-test.md`](docs/findings/kindle-hardware-test.md).
-5. ~~Conexão persistente com push automático + resize automático de tela~~ — **feito, testado**:
-   o app conecta uma vez, chama `vnc_client_start_updates()` uma vez, e a própria `libvncclient`
-   mantém sozinha um pedido incremental sempre em andamento — o servidor só responde quando o
-   conteúdo muda de verdade (reconexão automática se a conexão cair). O botão "Atualizar" foi
-   **removido** (perdeu função com o push automático, e resolveu junto o bug do botão
-   intocável). O cliente também detecta a resolução real da tela (`gdk_screen_width/height`) e
-   pede ao servidor pra redimensionar a área remota via `SetDesktopSize` (extensão RFB), pra
-   qualquer Kindle que conectar receber o frame 1:1, sem escala. Três bugs reais na
-   `libvncclient` vendorizada foram encontrados e contornados nesse processo — detalhes em
-   [`kindle-hardware-test.md`](docs/findings/kindle-hardware-test.md).
-
-6. ~~Teclado virtual~~ (parte 2 da PoC, item 1 — **feito, testado no hardware real**): faixa fixa
-   nos 35% de baixo da tela do Kindle (`KEYBOARD_HEIGHT_PERCENT` em `ui.c`), frame remoto ocupa
-   os 65% de cima — a área útil (ex.: `1072x941` no device real) é a mesma que já era pedida via
-   `SetDesktopSize`, sem mecanismo novo de resize. Módulo puro novo `app/src/keyboard.c`/`.h`
-   (layout como dados: 2 páginas × 6 fileiras, hit-test, sticky Shift/Ctrl — modificador arma pro
-   próximo toque, já que multi-touch confiável não existe nesse hardware; Ctrl embrulha a tecla
-   em `Control_L` down/up, Shift troca keysym e rótulo exibido), desenho de alto contraste em
-   Cairo no `ui.c` (teclas brancas/borda preta, modificador armado invertido), `SendKeyEvent`
-   plumbado por `vnc_client_send_key`/`session_send_key`. Teste unitário novo
-   `app/tests/test_keyboard.c` (9 casos, mesma convenção sem framework do `pixel_convert`).
-   Validado no device: digitação, Shift, Ctrl+C, página de símbolos. Achado de plataforma: a
-   fonte do Kindle não tem o glifo ⌫ (aparecia tofu) — rótulo trocado por "Bksp"; setas
-   ←↑↓→ renderizam ok. De carona, o teste no hardware revelou e resolveu uma travadinha real do
-   Enter — ver a revisão de encoding em [`rfb-protocol.md`](docs/findings/rfb-protocol.md).
-
-7. ~~Menu do app (páginas/ações locais) + zoom remoto em 3 camadas~~ — **feito, testado no
-   hardware real**: uma terceira página do teclado virtual, aberta pelo chord Ctrl+Shift+tecla-de-página
-   (o rótulo vira "Menu" destacado quando o chord arma — funciona a partir das páginas de
-   letras e de símbolos). Ações: voltar ao teclado, três pares de zoom (A-/A+), status da
-   conexão (log) e sair do Kindow — a primeira forma de sair sem SSH. Um novo tipo de tecla,
-   `KEY_ACTION`, emite uma `KeyboardAction` local via um callback próprio (`ui`→`main`) que
-   nunca chega a ir pro servidor VNC. **Zoom remoto em três camadas INDEPENDENTES** (evolução
-   de um controle único, separado a pedido do usuário durante a sessão): Apps (Xft/DPI via
-   `xsettingsd`, ao vivo pra qualquer app GTK), Janela (fonte do titlebar do Openbox em
-   pontos, `rc.xml` + `openbox --reconfigure` ao vivo) e Painel (fontes do `tint2rc` +
-   reinício do `tint2`). Servidor: [`pi/kindow-helperd`](pi/kindow-helperd), protocolo TCP na
-   porta 5910 (`dpi`/`deco`/`panel N`, `get` devolve os três, `ping`). Cliente:
-   [`remote_control.c`/`.h`](app/src/remote_control.c) + `ZoomSpec`/`handle_zoom` em
-   `main.c`. Decisão-chave: o `xrdb` da sessão fica **congelado em 192** — era o elo que
-   re-acoplava as três camadas entre si. Arquitetura núcleo-vs-shims documentada no próprio
-   `kindow-helperd`: XSETTINGS é o núcleo genérico, Openbox/tint2 são shims por componente.
-   De quebra, um achado real de hardware: **`l3afpad` trocado por `mousepad`** no `xstartup`
-   — o `l3afpad` pina a fonte da área de edição (ignora Xft/DPI), diagnosticado com
-   screenshots comparativos no Pi; o `mousepad` usa a fonte monoespaçada do sistema e reescala
-   ao vivo junto com o zoom de Apps. Também entregue: **flash de tecla** — feedback de toque
-   no teclado virtual (tecla normal/ação pisca invertida por ~180ms, sticky/página não
-   piscam porque o feedback delas já é o próprio estado), validado no hardware. Teste
-   unitário `test_keyboard.c` cresceu de 9 pra 15 casos. Detalhes das três técnicas de
-   investigação (diagnóstico por screenshot, medição de `SO_SNDTIMEO`/`connect()`,
-   generalização do self-match de `pgrep`/`pkill`) em
-   [`kindle-hardware-test.md`](docs/findings/kindle-hardware-test.md); revisão da composição
-   da sessão do Pi em [`pi-vnc-server.md`](docs/findings/pi-vnc-server.md). O item 5 da fila
-   (menu do app) ficou **parcialmente** feito — ver `docs/ideias-futuras.md`: ainda falta
-   desconectar/conectar em outro IP com persistência (o toggle do teclado por gesto virou
-   botão dedicado na reestrutura de UI abaixo, item 8).
-
-8. ~~Reestrutura de UI: barra fixa, painel unificado, arrasto real, scroll ajustável,
-   proporção de tela~~ — **feito, revisado e VALIDADO no hardware pelo usuário** (sessão de
-   27/08, madrugada→manhã: cinco etapas implementadas, cross-compiladas, deployadas e
-   revisadas enquanto o usuário dormia, confirmadas funcionando por ele ao acordar — "está
-   tudo funcionando"). (1) Barra fixa no rodapé com 4 botões (Scroll ↑, Scroll ↓, Teclado,
-   Menu), sempre visível. (2) Teclado e menu viraram conteúdo mutuamente exclusivo de um
-   "painel" único (`PanelMode` em `ui.c`), alternado pelas 3 regras de toggle (nada
-   aberto→abre; outro aberto→troca; já aberto→fecha); `SetDesktopSize` é re-pedido a cada
-   abertura/fechamento (`session_set_target_size`). (3) A etapa mais arriscada: a página de
-   símbolos do teclado (`?123`) ganhou duas teclas, "Esquerdo" (sticky, arma clique
-   contínuo) e "Direito" (ação imediata), substituindo o espaço só ali (letras mantém
-   espaço normal) — exigiu rastreamento real de motion/release em `ui.c`
-   (`GDK_POINTER_MOTION_MASK` + `HINT` pro coalescing do GTK2, throttle de 8px), o arrasto
-   termina quando o dedo levanta da tela; `session_send_drag` sempre clampa coordenada em
-   vez de descartar, pra garantir que o release sempre chegue. O que o arrasto significa
-   (mover janela, redimensionar, selecionar texto) é decidido pelo Openbox/GTK do servidor,
-   sem desambiguação nossa. (4) Par "Scroll A-"/"Scroll A+" no menu ajusta quantas catracas
-   de roda cada toque manda (`session_get/set_scroll_lines`, puramente client-side, faixa
-   1-10). (5) `BAR_HEIGHT_PX` fixo (60px) virou `BAR_HEIGHT_PERCENT` (4% da altura + piso de
-   40px), com insets e bordas também proporcionais à altura local de cada linha/botão
-   (`proportional_inset`/`proportional_border_width` em `ui.c`) — garante que o app funcione
-   bem em Kindles de resolução diferente da testada. De carona, um bug real achado pelo
-   `reviewer`: `left_click_armed` vazava entre páginas/painéis sem indicador visual,
-   corrigido em dois pontos (`keyboard.c`, `ui.c`) com teste de regressão novo. Suíte
-   `test_keyboard.c` tem agora 14 casos. Commits `e6de59e` (implementação) e `050b189`
-   (confirmação de validação), ambos em `origin/main`. Detalhes técnicos completos dos itens
-   3, 4 e 5 da fila em [`docs/ideias-futuras.md`](docs/ideias-futuras.md).
-
-## Ideias futuras (não implementadas)
-
-A fila priorizada da **parte 2 da PoC** (definida em 26/08, ao fechar a parte 1) vive em
-[`docs/ideias-futuras.md`](docs/ideias-futuras.md). Dos itens originais, restam pendentes: o
-resto do menu do app (desconectar/conectar em outro IP com persistência), orientação
-paisagem — mais as duas exploratórias já anotadas antes (espelhar a sessão física do Pi e
-usar o Kindle como segundo monitor de verdade). Os itens 1 (teclado virtual), 2 (GUI com
-editor de texto), 3 (scroll) e 4 (botão direito/arrasto) já saíram da fila; o item 5 (menu
-do app) ficou parcialmente feito — ver "Próximos passos" acima (itens 7 e 8).
-
-## Estrutura do repositório
-
-- `docs/findings/` — achados técnicos, um arquivo por problema/solução (mesmo padrão do
-  projeto `kindle`).
-- `app/` — o cliente GTK do Kindle (`tests/`, `meson.build`), organizado como Ports & Adapters
-  leve: `src/main.c` é só wiring (instancia os módulos abaixo e liga os callbacks, sem lógica
-  própria); `src/session.c`/`.h` é o núcleo — ciclo de vida da conexão (conectar, reconectar
-  sozinho a cada 2s, watch do fd), política de resize e envio de clique/tecla/scroll/arrasto
-  (clique direito) — e conhece GLib como event loop, mas não GTK/GDK/Cairo; `src/ui.c`/`.h` é
-  o adapter de apresentação (janela, desenho, captura de toque, barra fixa do rodapé, painel
-  unificado de teclado/menu — `PanelMode` — e rastreamento de motion/release do arrasto) e
-  não conhece VNC; `src/kindle_platform.c`/`.h` isola tudo que é específico do device
-  (screensaver via `lipc`, título mágico de janela do Awesome WM); `src/vnc_client.c`/`.h` é
-  o único módulo que fala com `libvncclient`; `src/keyboard.c`/`.h` é o módulo puro do
-  teclado virtual (layout, hit-test, sticky Shift/Ctrl, teclas Esquerdo/Direito da página de
-  símbolos — zero GTK, zero VNC, com `app/tests/test_keyboard.c`);
-  `src/remote_control.c`/`.h` é o cliente TCP do `kindow-helperd` (`pi/kindow-helperd`) — o
-  canal lateral de comando pro zoom remoto, que o protocolo RFB não cobre; chamado só do
-  wiring (`main.c`), em resposta às ações da página de menu do teclado, sem GTK/VNC também;
-  `src/pixel_convert.c` é o módulo puro de conversão de pixel, testável; `src/timing.h` tem os
-  helpers de instrumentação de latência.
-- `pi/` — o lado servidor, versionado (antes esses arquivos só existiam como estado aplicado
-  à mão no device, com registro em `docs/findings/` — dívida quitada em 26/08): `xstartup`
-  (sessão: `xsettingsd` + Openbox + tint2 + mousepad, `Xft.dpi` 2x pros ~300dpi do Kindle),
-  `tint2rc` (painel claro de alto contraste), `vnc-kindle.service`, `kindow-helperd` (+
-  `.service`) — o canal de comando TCP que permite ao Kindle mudar o zoom (`Xft/DPI` via
-  `xsettingsd`) ao vivo — e o instalador idempotente `install.sh`.
-- `cmake/` — toolchain file de CMake pro cross-compile do `libvncclient`.
-- `vendor/libvncserver` — submódulo git do `libvncclient` (LibVNC/libvncserver), pinado numa
-  release estável.
-
-## Instalando o lado Pi
-
-Com um Raspberry Pi (usuário `pi`) acessível por SSH:
+### Lado Pi (servidor)
 
 ```bash
 scp -r pi/ pi@<ip-do-pi>:/tmp/kindow-pi && ssh -t pi@<ip-do-pi> 'bash /tmp/kindow-pi/install.sh'
 ```
 
-O `install.sh` é idempotente (re-rodar é seguro): instala os pacotes, aplica as configs da
-sessão (sem sobrescrever personalizações como o zoom escolhido ou um `rc.xml` editado),
-instala e habilita os dois serviços (`vnc-kindle`, `kindow-helperd`) e verifica no final que
-ambos respondem. O `sudo` pede a senha no próprio terminal do usuário.
+O [`install.sh`](pi/install.sh) é idempotente (re-rodar é seguro): instala os pacotes
+(TigerVNC, Openbox, tint2, mousepad, xsettingsd), aplica as configs da sessão sem
+sobrescrever personalizações (zoom escolhido, `rc.xml` editado), instala e habilita os
+dois serviços (`vnc-kindle` na porta 5901, `kindow-helperd` na 5910 — o canal lateral do
+zoom) e verifica no final que ambos respondem.
+
+### Lado Kindle (cliente)
+
+Com o binário já cross-compilado (ver abaixo) e SSH root no Kindle:
+
+```bash
+./kindle/deploy.sh <ip-do-kindle>
+```
+
+Copia o binário + `libvncclient` pra `/mnt/us/kindow/`, instala o scriptlet
+[`kindle/kindow.sh`](kindle/kindow.sh) em `/mnt/us/documents/` (vira o item "Kindow"
+tocável na biblioteca) e relança o app.
+
+### Compilando o cliente
+
+O cliente é C/GTK2 (o GTK que o firmware do Kindle traz), cross-compilado com Meson
+dentro de um container com o toolchain do KindleModding — siga o
+[tutorial de GTK do KindleModding](https://kindlemodding.org/kindle-dev/gtk-tutorial/)
+pra montar o container (koxtoolchain + KMC SDK). Com ele de pé:
+
+```bash
+# uma vez: o libvncclient vendorizado (submódulo), cross-compilado e instalado no
+# sysroot do toolchain — a receita completa e testada (todas as flags, o install no
+# sysroot e a verificação) está em docs/findings/libvncclient-api.md
+cd vendor/libvncserver && cmake -B build -S . \
+  -DCMAKE_TOOLCHAIN_FILE=../../cmake/Toolchain-arm-kindlehf-linux-gnueabihf.cmake \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=<sysroot-do-toolchain>/usr \
+  -DWITH_LIBVNCSERVER=OFF -DWITH_LIBVNCCLIENT=ON \
+  -DWITH_GCRYPT=OFF -DWITH_OPENSSL=OFF -DWITH_GNUTLS=OFF -DWITH_JPEG=OFF -DWITH_PNG=OFF \
+  -DBUILD_SHARED_LIBS=ON
+cmake --build build && cmake --install build
+
+# o app em si
+cd app && meson setup build --cross-file <seu-meson-crosscompile.txt> && ninja -C build
+```
+
+Os testes unitários dos módulos puros rodam em qualquer máquina, sem toolchain:
+
+```bash
+cd app
+cc -std=gnu11 -Wall -Wextra -Isrc src/connection_store.c tests/test_connection_store.c -o /tmp/t && /tmp/t
+cc -std=gnu11 -Wall -Wextra -Isrc src/keyboard.c tests/test_keyboard.c -o /tmp/t && /tmp/t
+cc -std=gnu11 -Wall -Wextra -Isrc src/pixel_convert.c tests/test_pixel_convert.c -o /tmp/t && /tmp/t
+```
+
+## Usando
+
+1. Toque em **"Kindow"** na biblioteca do Kindle (a Home aparece por ~3s antes do app —
+   é intencional, uma corrida com o redesenho da Home que o launcher precisa vencer).
+2. **Tela de conexão**: toque num Pi já usado pra reconectar, ou no **"+"** pra digitar
+   IP/porta/senha de um novo (senha em branco = servidor sem senha, o padrão do
+   `install.sh`). Conexões que funcionaram entram no histórico
+   (`/mnt/us/kindow/connections.txt` — a senha fica lá em texto simples, decisão
+   documentada em [`app/src/connection_store.h`](app/src/connection_store.h)).
+3. **Na sessão**: toque interage direto com o desktop do Pi. A barra do rodapé alterna
+   teclado/menu; a página `?123` do teclado tem os cliques Esquerdo (arrasto) e Direito.
+4. **Sair/trocar de Pi**: menu → "Desconectar do Pi" volta pra tela de conexão; sem
+   sessão ativa, o botão "Menu" da barra vira **"Sair"**.
+
+## Arquitetura
+
+Ports & Adapters leve — cada dependência externa isolada atrás de um módulo próprio:
+
+- [`app/src/main.c`](app/src/main.c) — só wiring: instancia os módulos e liga callbacks.
+- [`app/src/session.c`](app/src/session.c) — o núcleo: ciclo de vida da conexão
+  (conectar, reconectar sozinho, watch do fd), política de resize, envio de
+  clique/tecla/scroll/arrasto. Conhece GLib (event loop), não GTK nem VNC.
+- [`app/src/ui.c`](app/src/ui.c) — adapter de apresentação (GTK2/Cairo): janela, toque,
+  barra, painel teclado/menu, telas de conexão. Não conhece VNC.
+- [`app/src/vnc_client.c`](app/src/vnc_client.c) — único módulo que fala com
+  `libvncclient`.
+- [`app/src/kindle_platform.c`](app/src/kindle_platform.c) — específicos do device
+  (screensaver via `lipc`, título mágico de janela, diretório de dados).
+- Módulos puros e testáveis (zero GTK/VNC): [`keyboard.c`](app/src/keyboard.c) (layout,
+  hit-test, sticky keys), [`connection_store.c`](app/src/connection_store.c) (histórico
+  de conexões) e [`pixel_convert.c`](app/src/pixel_convert.c) (cores → cinza).
+- [`app/src/remote_control.c`](app/src/remote_control.c) — cliente TCP do
+  `kindow-helperd` (zoom remoto, fora do protocolo RFB).
+- [`pi/`](pi/) — o lado servidor completo (sessão X, serviços, instalador).
+- [`kindle/`](kindle/) — scriptlet de lançamento e script de deploy.
+- [`vendor/libvncserver`](vendor/libvncserver) — submódulo, pinado em 0.9.15.
+
+## Documentação técnica
+
+- [`docs/findings/`](docs/findings/) — achados técnicos, um arquivo por
+  problema/solução: protocolo RFB e encodings, API da libvncclient (e os bugs reais dela
+  contornados), escolha do servidor VNC, e tudo que só o teste em hardware revelou.
+- [`docs/ideias-futuras.md`](docs/ideias-futuras.md) — a fila do que vem depois, com o
+  raciocínio registrado antes de cada implementação.
+- [`docs/historico-da-poc.md`](docs/historico-da-poc.md) — o diário cronológico da PoC
+  (o antigo conteúdo deste README), preservado como registro fiel de como o projeto
+  chegou aqui.
+
+## Licença
+
+[GPL-3.0](LICENSE). A escolha acompanha a dependência: o `libvncclient` vendorizado é
+GPL-2.0+, então qualquer binário distribuído já herdaria os termos GPL de qualquer
+jeito — licenciar o projeto inteiro como GPL é a opção coerente.
