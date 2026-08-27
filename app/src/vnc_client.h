@@ -54,6 +54,11 @@ bool vnc_client_handle_messages(VncClient *client, VncFrameReadyFn on_frame, voi
 
 void vnc_client_send_pointer(VncClient *client, int x, int y, int button_mask);
 
+/* Evento de tecla (keysym X11, que é o vocabulário do próprio RFB; down=true pressiona,
+ * false solta). Mesma política de erro do send_pointer: falha de write só loga — a queda
+ * de conexão é detectada pelo watch do fd do chamador. */
+void vnc_client_send_key(VncClient *client, uint32_t keysym, bool down);
+
 /* Pede ao servidor pra redimensionar a área remota pro tamanho informado (extensão RFB
  * SetDesktopSize/ExtDesktopSize — o TigerVNC aplica via Xrandr). Só faz sentido chamar
  * depois que pelo menos um frame já foi processado nessa conexão; chamar mais de uma vez

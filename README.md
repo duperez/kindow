@@ -59,7 +59,8 @@ As três frentes de pesquisa terminaram, cada uma com decisões concretas regist
 `docs/findings/`:
 
 - [`rfb-protocol.md`](docs/findings/rfb-protocol.md) — segurança `None`, formato de pixel padrão
-  do servidor com conversão pra cinza no cliente, encoding `Raw` (+`CopyRect` opcional),
+  do servidor com conversão pra cinza no cliente, encoding `ZRLE` (revisado de `Raw` em 26/08,
+  depois de medir ~155x menos bytes num scroll real e resolver um freeze do Enter),
   confirmação de que atualização sob demanda é o próprio design nativo do protocolo (não um
   "jeito de forçar"). A recomendação original de reconectar a cada interação foi **revisada**
   depois do teste em hardware real — ver `kindle-hardware-test.md`: hoje o modelo é conexão
@@ -116,19 +117,28 @@ As três frentes de pesquisa terminaram, cada uma com decisões concretas regist
    `libvncclient` vendorizada foram encontrados e contornados nesse processo — detalhes em
    [`kindle-hardware-test.md`](docs/findings/kindle-hardware-test.md).
 
-## O que falta pra além da PoC (polish, não bloqueador)
-
-- `SendKeyEvent`/teclado ainda não implementado — só toque (`PointerEvent`) funciona hoje. Uma
-  direção cogitada (ainda sem pesquisa nem decisão) é um teclado virtual desenhado no próprio
-  Kindle, que traduziria toque em `SendKeyEvent` — não é compromisso, só anotado como possível
-  próximo passo.
+6. ~~Teclado virtual~~ (parte 2 da PoC, item 1 — **feito, testado no hardware real**): faixa fixa
+   nos 35% de baixo da tela do Kindle (`KEYBOARD_HEIGHT_PERCENT` em `ui.c`), frame remoto ocupa
+   os 65% de cima — a área útil (ex.: `1072x941` no device real) é a mesma que já era pedida via
+   `SetDesktopSize`, sem mecanismo novo de resize. Módulo puro novo `app/src/keyboard.c`/`.h`
+   (layout como dados: 2 páginas × 6 fileiras, hit-test, sticky Shift/Ctrl — modificador arma pro
+   próximo toque, já que multi-touch confiável não existe nesse hardware; Ctrl embrulha a tecla
+   em `Control_L` down/up, Shift troca keysym e rótulo exibido), desenho de alto contraste em
+   Cairo no `ui.c` (teclas brancas/borda preta, modificador armado invertido), `SendKeyEvent`
+   plumbado por `vnc_client_send_key`/`session_send_key`. Teste unitário novo
+   `app/tests/test_keyboard.c` (9 casos, mesma convenção sem framework do `pixel_convert`).
+   Validado no device: digitação, Shift, Ctrl+C, página de símbolos. Achado de plataforma: a
+   fonte do Kindle não tem o glifo ⌫ (aparecia tofu) — rótulo trocado por "Bksp"; setas
+   ←↑↓→ renderizam ok. De carona, o teste no hardware revelou e resolveu uma travadinha real do
+   Enter — ver a revisão de encoding em [`rfb-protocol.md`](docs/findings/rfb-protocol.md).
 
 ## Ideias futuras (não implementadas)
 
-Propostas levantadas em conversa, ainda sem pesquisa nem decisão — ver
-[`docs/ideias-futuras.md`](docs/ideias-futuras.md): espelhar a sessão física do Pi (em vez de
-uma sessão virtual própria) e usar o Kindle como segundo monitor de verdade (extensão via
-Xrandr, não sessão espelhada).
+A fila priorizada da **parte 2 da PoC** (definida em 26/08, ao fechar a parte 1) vive em
+[`docs/ideias-futuras.md`](docs/ideias-futuras.md): GUI com editor de texto, scroll, botão
+direito, menu do app, orientação paisagem — mais as duas exploratórias já anotadas antes
+(espelhar a sessão física do Pi e usar o Kindle como segundo monitor de verdade). O item 1
+(teclado virtual) já saiu da fila — ver "Próximos passos" acima.
 
 ## Estrutura do repositório
 
@@ -137,12 +147,15 @@ Xrandr, não sessão espelhada).
 - `app/` — o cliente GTK do Kindle (`tests/`, `meson.build`), organizado como Ports & Adapters
   leve: `src/main.c` é só wiring (instancia os módulos abaixo e liga os callbacks, sem lógica
   própria); `src/session.c`/`.h` é o núcleo — ciclo de vida da conexão (conectar, reconectar
-  sozinho a cada 2s, watch do fd), política de resize e envio de clique — e conhece GLib como
-  event loop, mas não GTK/GDK/Cairo; `src/ui.c`/`.h` é o adapter de apresentação (janela,
-  desenho, captura de toque) e não conhece VNC; `src/kindle_platform.c`/`.h` isola tudo que é
-  específico do device (screensaver via `lipc`, título mágico de janela do Awesome WM);
-  `src/vnc_client.c`/`.h` é o único módulo que fala com `libvncclient`; `src/pixel_convert.c`
-  é o módulo puro testável; `src/timing.h` tem os helpers de instrumentação de latência.
+  sozinho a cada 2s, watch do fd), política de resize e envio de clique/tecla — e conhece GLib
+  como event loop, mas não GTK/GDK/Cairo; `src/ui.c`/`.h` é o adapter de apresentação (janela,
+  desenho, captura de toque, faixa do teclado virtual) e não conhece VNC;
+  `src/kindle_platform.c`/`.h` isola tudo que é específico do device (screensaver via `lipc`,
+  título mágico de janela do Awesome WM); `src/vnc_client.c`/`.h` é o único módulo que fala com
+  `libvncclient`; `src/keyboard.c`/`.h` é o módulo puro do teclado virtual (layout, hit-test,
+  sticky Shift/Ctrl — zero GTK, zero VNC, com `app/tests/test_keyboard.c`);
+  `src/pixel_convert.c` é o módulo puro de conversão de pixel, testável; `src/timing.h` tem os
+  helpers de instrumentação de latência.
 - `cmake/` — toolchain file de CMake pro cross-compile do `libvncclient`.
 - `vendor/libvncserver` — submódulo git do `libvncclient` (LibVNC/libvncserver), pinado numa
   release estável.

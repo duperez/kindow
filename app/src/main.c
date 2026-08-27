@@ -32,6 +32,11 @@ static void on_ui_click(int x, int y, void *user_data) {
     session_send_click(app->session, x, y);
 }
 
+static void on_ui_key(uint32_t keysym, bool down, void *user_data) {
+    App *app = user_data;
+    session_send_key(app->session, keysym, down);
+}
+
 /* Gatilho de debug: `kill -HUP <pid>` imprime o estado atual da conexão no log — útil pra
  * confirmar via SSH que o app está vivo e conectado sem precisar tocar a tela física.
  * SIGHUP em vez de SIGUSR1 porque o glib desse sysroot só aceita SIGHUP/SIGINT/SIGTERM em
@@ -64,8 +69,15 @@ int main(int argc, char **argv) {
 
     kindle_platform_keep_awake(true);
 
-    app.ui = ui_create(kindle_platform_window_title(), on_ui_click, &app);
-    app.session = session_start(host, port, ui_screen_width(app.ui), ui_screen_height(app.ui),
+    app.ui = ui_create(kindle_platform_window_title(), on_ui_click, on_ui_key, &app);
+    if (!app.ui) {
+        g_printerr("kindow: sem memória pra criar a UI\n");
+        kindle_platform_keep_awake(false);
+        return 1;
+    }
+    /* O alvo do resize remoto é a ÁREA ÚTIL (tela menos a faixa do teclado) — o servidor
+     * renderiza exatamente o espaço disponível, 1:1, sem escala nem corte. */
+    app.session = session_start(host, port, ui_frame_width(app.ui), ui_frame_height(app.ui),
                                 (SessionCallbacks){.on_frame = on_session_frame,
                                                    .user_data = &app});
     if (!app.session) {

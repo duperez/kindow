@@ -261,10 +261,57 @@ de dev, não faz parte do fluxo de uso real do app.
   sentido "matar", diferente do SIGHUP que a gente escuta de propósito pra outra coisa).
 - `DISPLAY=:0` é o display X real do Kindle (onde o `awesome`/apps do sistema já rodam).
 
+## Sessão de 26/08 (parte 2): teclado virtual — freeze do Enter, glifo ausente, técnica de medição
+
+Resultado: teclado virtual validado no device (digitação, Shift, Ctrl+C, página de símbolos).
+Chegar lá exigiu investigar um freeze real que só apareceu testando digitação de verdade no
+hardware — os achados abaixo.
+
+### Achado #9: Enter com scroll de tela cheia congelava o app por 3-5s — causa era o encoding `Raw`
+
+**Sintoma**: apertar Enter no `xterm` remoto quando a tela tinha conteúdo suficiente pra rolar de
+verdade (não só uma linha nova) travava o app inteiro por alguns segundos — nesse intervalo,
+toques na faixa do teclado ficavam represados, só sendo processados depois que o freeze acabava.
+
+**Causa raiz**: o loop principal do GTK roda numa única thread (decisão registrada em
+`libvncclient-api.md`, seção de integração com `g_io_add_watch`); com o encoding `Raw` forçado
+(decisão original de `rfb-protocol.md`), um scroll de tela cheia gera um retângulo `Raw` gigante,
+e o `vnc_client_handle_messages()` (chamado a partir do watch do fd) bloqueia lendo o socket até
+esse retângulo inteiro chegar pela rede — nesse tempo, o loop do GTK não processa mais nada,
+inclusive os eventos de toque na faixa do teclado.
+
+**Medição real** (não estimativa): forçado um scroll de verdade escrevendo no pty do `xterm`
+remoto a partir do Pi (`seq ... > /dev/pts/0`, achando o pty certo via `ps`/`tty` do processo do
+`xterm`) e medindo o delta de `rx_bytes` em `/proc/net/dev` no `wlan0` do Kindle antes/depois. 60
+linhas de scroll real: **2.221.796 bytes com `Raw`** → **14.345 bytes com `ZRLE`** (~155x menos).
+`zlib` já estava presente no build mínimo vendorizado (as funções `HandleZRLE*` já compilavam,
+só não estavam habilitadas via `encodingsString`), então não precisou de dependência nova.
+
+**Correção**: `rfb->appData.encodingsString` trocado de `"raw"` pra `"zrle copyrect raw"` em
+`vnc_client_connect()` (`app/src/vnc_client.c`) — decisão revisada em detalhe, com a tabela de
+antes/depois, em [`rfb-protocol.md`](rfb-protocol.md). O workaround do burst vazio (Achado #2
+acima) continua válido: `GotFrameBufferUpdate` dispara pra todo rect independente do encoding,
+confirmado direto no vendor (`rfbclient.c:2561`).
+
+**Técnica de medição que vale registrar pra próxima vez**: `xrefresh` **não** serve de gatilho
+pra esse tipo de teste — o TigerVNC compara o conteúdo real da tela e não manda `FramebufferUpdate`
+nenhum se os pixels não mudaram, então `xrefresh` sozinho não gera tráfego pra medir. É preciso
+uma mudança de conteúdo de verdade (scroll real via pty) pra reproduzir o cenário que efetivamente
+importa (digitação continuada, não um único caractere parado).
+
+### Achado #10: fonte do Kindle não tem o glifo ⌫ — tofu na tecla de Backspace
+
+O rótulo original da tecla de apagar usava o glifo Unicode `⌫` (U+232B, "erase to the left") —
+na fonte que o Kindle carrega, esse glifo não existe e o Cairo desenhava o "tofu" padrão
+(quadradinho vazio), sem erro nenhum de log. Trocado por texto ASCII simples ("Bksp") em
+`app/src/keyboard.c` — sem dependência de cobertura de glifo específica. As setas `←↑↓→`
+(usadas na página de símbolos/navegação) renderizam normalmente nessa mesma fonte — o problema é
+específico do glifo de backspace, não de Unicode em geral nesse device.
+
 ## Verificação (majoritariamente), não medição — exceto onde marcado
 
 Este documento registra sobretudo o que foi observado e corrigido nas sessões de teste — resolução
-do device, comportamento do TigerVNC, mecânica de deploy. A seção "Latência medida no hardware
-real" (26/08) é a exceção deliberada: números de `clock_gettime` de verdade, não estimativa. O
-resto segue confirmado/válido até prova em contrário (ex: em outro modelo de Kindle, ou versão
-diferente do TigerVNC).
+do device, comportamento do TigerVNC, mecânica de deploy. As seções "Latência medida no hardware
+real" e "Achado #9" (ambas de 26/08) são a exceção deliberada: números de `clock_gettime`/
+`rx_bytes` de verdade, não estimativa. O resto segue confirmado/válido até prova em contrário (ex:
+em outro modelo de Kindle, ou versão diferente do TigerVNC).

@@ -48,7 +48,7 @@ complexidade de modo paleta, e é o caminho mais testado da biblioteca (o padrã
 8bpp depois só como otimização de banda, se necessário — troca pequena e isolada (uma struct +
 uma chamada), não decisão de arquitetura.
 
-## Encodings — só `Raw` (+ talvez `CopyRect`)
+## Encodings — decisão original `Raw` (+ talvez `CopyRect`); **revisada** pra `ZRLE` depois de medir
 
 `Raw` é o fallback obrigatório: mesmo que a gente não peça, um servidor pode mandar retângulos
 `Raw` de qualquer forma — então o decodificador precisa suportar de qualquer jeito. É a mais
@@ -56,6 +56,24 @@ simples de raciocinar (sem estado de compressor, sem casos extremos de tile), e 
 atualiza sob demanda (não é vídeo contínuo), a eficiência que RRE/Hextile/ZRLE trazem importa bem
 menos aqui do que numa sessão VNC interativa normal. `CopyRect` custa quase nada a mais (só um
 "copia daqui pra ali" dentro do próprio framebuffer, sem pixel novo). Deferir o resto.
+
+**Revisão (teclado virtual, 26/08 — parte 2 da PoC)**: a premissa "eficiência de encoding importa
+pouco porque a tela só atualiza sob demanda" não segurou na prática assim que o uso passou a
+incluir digitação real. Com `Raw` forçado (`encodingsString = "raw"`), apertar Enter numa tela
+com scroll cheio (o `xterm` rolando de verdade, não só um caractere novo) congelava o app por
+3-5 segundos — o loop do GTK ficava bloqueado lendo o socket até o rect `Raw` inteiro chegar, e
+os toques na faixa do teclado ficavam represados até destravar. Medido no `wlan0` do Kindle
+(delta de `rx_bytes` em `/proc/net/dev`, scroll real forçado escrevendo no pty remoto do `xterm`
+— `xrefresh` **não** serve de gatilho, o TigerVNC compara conteúdo e não manda nada se os pixels
+não mudaram): 60 linhas de scroll = **2.221.796 bytes com `Raw`** → **14.345 bytes com `ZRLE`**
+(**~155x menos**). `zlib` já estava disponível no build mínimo da lib vendorizada (as funções
+`HandleZRLE*` já estavam presentes, só não habilitadas via `encodingsString`) — trocar não exigiu
+nenhuma dependência nova. **Decisão atual**: `encodingsString = "zrle copyrect raw"` (ZRLE
+primeiro, `CopyRect` como já estava cogitado, `Raw` como fallback obrigatório de qualquer forma).
+O workaround do burst vazio (Achado #2 de `kindle-hardware-test.md`) continua válido nesse
+encoding: `GotFrameBufferUpdate` dispara pra todo rect independente do encoding usado (confirmado
+em `vendor/libvncserver/src/libvncclient/rfbclient.c:2561`). Detalhe completo da medição em
+[`kindle-hardware-test.md`](kindle-hardware-test.md).
 
 ## Mensagens mínimas necessárias
 
@@ -115,7 +133,7 @@ conexão cair, em vez de reconectar preventivamente a cada interação. Detalhe 
 |---|---|
 | Segurança | `None` |
 | Formato de pixel | Aceitar padrão do servidor, converter pra cinza/dither no cliente |
-| Encoding | `Raw` (+ `CopyRect` opcional) |
+| Encoding | ~~`Raw` (+ `CopyRect` opcional)~~ **Revisado**: `ZRLE` primeiro (`"zrle copyrect raw"`) — medido ~155x menos bytes num scroll real, resolve o freeze do Enter (ver seção acima) |
 | Modelo de atualização | Sob demanda (push do protocolo quando o conteúdo muda) — é o design nativo do RFB |
 | Ciclo de vida da conexão | ~~Reconectar a cada interação~~ **Revisado**: conexão persistente, pedido incremental sempre em andamento; reconecta só se a conexão cair (ver seção acima) |
 

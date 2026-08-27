@@ -38,6 +38,11 @@ Session *session_start(const char *host, int port, int target_width, int target_
  * atual (coordenadas inválidas não devem chegar ao servidor). */
 void session_send_click(Session *session, int x, int y);
 
+/* Evento de tecla (keysym X11; down=true pressiona, false solta). Ignorado em silêncio se
+ * não há conexão — diferente do clique, não depende de frame nenhum ter chegado (tecla não
+ * carrega coordenada pra validar). */
+void session_send_key(Session *session, uint32_t keysym, bool down);
+
 /* Imprime no stderr o estado atual (conectado? tamanho do último frame?) — gatilho de
  * debug, ver o handler de SIGHUP em main.c. */
 void session_log_status(const Session *session);

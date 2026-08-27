@@ -192,8 +192,12 @@ surpresa pra decidir depois.
 5. ~~`SendPointerEvent` com toque~~ — **feito**: `vnc_client_send_pointer()`, chamado por
    `session_send_click()` em [`app/src/session.c`](../../app/src/session.c) a partir do toque
    que [`app/src/ui.c`](../../app/src/ui.c) captura na `GtkDrawingArea` e repassa via callback
-   até virar `PointerEvent`. `SendKeyEvent`/`keysym.h` **ainda não implementado** — a PoC atual
-   só cobre toque, não teclado (não era o foco do "minimamente usável" inicial).
+   até virar `PointerEvent`. ~~`SendKeyEvent`/`keysym.h` ainda não implementado~~ — **feito
+   (26/08, parte 2 da PoC)**: `vnc_client_send_key()`, chamado por `session_send_key()` a partir
+   do teclado virtual (`app/src/keyboard.c`/`.h`, módulo puro de layout/hit-test/sticky
+   modifiers) desenhado por `ui.c` numa faixa fixa da tela. Testado no device: digitação, Shift,
+   Ctrl+C, página de símbolos — detalhe completo em
+   [`kindle-hardware-test.md`](kindle-hardware-test.md).
 6. ~~Resize automático pra bater com a resolução real de qualquer Kindle~~ — **feito**:
    `vnc_client_request_desktop_size()`, extensão RFB `SetDesktopSize`/`ExtDesktopSize`. Três
    bugs reais na lib vendorizada foram encontrados e contornados nesse processo (endianTest não

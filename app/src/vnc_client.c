@@ -74,10 +74,16 @@ VncClient *vnc_client_connect(const char *host, int port, char **out_error) {
         return NULL;
     }
 
-    /* Decisão em docs/findings/rfb-protocol.md: só Raw (mais simples de raciocinar, sem
-     * estado de compressor). Sem isso, o padrão da lib ("tight zrle ultra copyrect hextile
-     * zlib corre rre raw") faria o servidor escolher ZRLE. */
-    rfb->appData.encodingsString = "raw";
+    /* Revisão (26/08) da decisão original de docs/findings/rfb-protocol.md (que era "só
+     * Raw", pela simplicidade): medido no hardware real, Raw fazia um Enter com scroll de
+     * tela cheia custar megabytes no WiFi (60 linhas de scroll = 2,2MB medidos no wlan0),
+     * congelando o app por 3-5s com o loop do GTK bloqueado lendo o socket. ZRLE (zlib,
+     * já presente no build mínimo da lib) comprime tela de texto dezenas de vezes, e
+     * CopyRect deixa o servidor transformar scroll em "copie essa região", quase de graça.
+     * A ordem da string é a ordem de preferência anunciada. O workaround do burst vazio
+     * (on_got_update) continua válido: GotFrameBufferUpdate dispara pra todo retângulo,
+     * qualquer que seja o encoding, CopyRect incluso (rfbclient.c:2561). */
+    rfb->appData.encodingsString = "zrle copyrect raw";
 
     VncClient *self = calloc(1, sizeof(VncClient));
     if (!self) {
@@ -310,6 +316,15 @@ void vnc_client_send_pointer(VncClient *client, int x, int y, int button_mask) {
          * assinatura é void, decisão de manter a chamada simples pro chamador); o watch de
          * G_IO_HUP/G_IO_ERR no fd (main.c) ainda vai pegar a queda de conexão sozinho. */
         fprintf(stderr, "kindow: falha ao mandar PointerEvent, conexão provavelmente caiu\n");
+    }
+}
+
+void vnc_client_send_key(VncClient *client, uint32_t keysym, bool down) {
+    if (!client) {
+        return;
+    }
+    if (!SendKeyEvent(client->rfb, keysym, down ? TRUE : FALSE)) {
+        fprintf(stderr, "kindow: falha ao mandar KeyEvent, conexão provavelmente caiu\n");
     }
 }
 

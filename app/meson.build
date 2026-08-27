@@ -6,6 +6,7 @@ vnc_dep = dependency('libvncclient')
 sources = files(
     'src/main.c',
     'src/ui.c',
+    'src/keyboard.c',
     'src/session.c',
     'src/kindle_platform.c',
     'src/vnc_client.c',
@@ -22,3 +23,12 @@ test_pixel_convert = executable(
     include_directories: include_directories('src'),
 )
 test('pixel_convert', test_pixel_convert)
+
+# keyboard.c é lógica pura (sem GTK, sem libvncclient) desenhada especificamente pra ser
+# testável como unidade — ver app/tests/test_keyboard.c.
+test_keyboard = executable(
+    'test-keyboard',
+    files('src/keyboard.c', 'tests/test_keyboard.c'),
+    include_directories: include_directories('src'),
+)
+test('keyboard', test_keyboard)

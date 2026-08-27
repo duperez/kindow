@@ -198,6 +198,13 @@ void session_send_click(Session *session, int x, int y) {
     vnc_client_send_pointer(session->client, x, y, 0);
 }
 
+void session_send_key(Session *session, uint32_t keysym, bool down) {
+    if (!session->client) {
+        return;
+    }
+    vnc_client_send_key(session->client, keysym, down);
+}
+
 void session_log_status(const Session *session) {
     g_printerr("kindow: status — conectado=%s frame=%dx%d\n",
                session->client ? "sim" : "não", session->frame_width, session->frame_height);
