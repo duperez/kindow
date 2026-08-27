@@ -1,7 +1,9 @@
 #include <glib-unix.h>
 #include <gtk/gtk.h>
+#include <stdio.h>
 #include <stdlib.h>
 
+#include "connection_store.h"
 #include "kindle_platform.h"
 #include "remote_control.h"
 #include "session.h"
@@ -20,10 +22,26 @@
 typedef struct {
     Ui *ui;
     Session *session;
-    const char *host;
+    /* Host/porta do Pi CONECTADO agora (ou tentando) — diferente de antes (26/08), não
+     * é mais fixo desde o boot: muda toda vez que o usuário escolhe/digita outro Pi na
+     * tela de conexão (item 5, 27/08, ver docs/ideias-futuras.md). */
+    char host[CONNECTION_STORE_HOST_LEN];
+    int port;
+    /* true entre pedir uma conexão nova e o primeiro frame chegar — é o sinal que
+     * on_session_frame usa pra saber que essa é a hora de sair de SCREEN_CONNECTING e
+     * persistir no histórico (ver on_session_frame). Reconexões automáticas depois de
+     * uma queda de rede NÃO passam por aqui de novo — só uma conexão pedida pelo
+     * usuário conta como "nova". */
+    bool connecting_first_frame;
+    /* Senha da conexão pedida agora (item 10) — vai pro histórico junto com host/porta
+     * quando o primeiro frame confirmar que ela funcionou. */
+    char password[CONNECTION_STORE_PASSWORD_LEN];
+    ConnectionStore store;
+    char store_path[256];
     /* Valores de zoom remotos conhecidos; dpi==0 = ainda não consultados (busca os três
      * no helperd no primeiro zoom, pra ancorar os A+/A- nos valores reais persistidos no
-     * Pi em vez de assumir). */
+     * Pi em vez de assumir). Zerado a cada troca de Pi — valores de um Pi não servem
+     * pra outro. */
     RemoteZoom remote;
 } App;
 
@@ -71,9 +89,35 @@ static void handle_scroll_lines(App *app, int direction) {
     g_printerr("kindow: linhas de scroll agora é %d\n", next);
 }
 
+/* Monta a lista de exibição a partir do histórico persistido e manda pra UI — chamada
+ * toda vez que a tela de conexão precisa reaparecer (boot, "Voltar", "Desconectar").
+ * O histórico já nasce ordenado por uso mais recente primeiro (connection_store.h), daí
+ * index 0 ser sempre o destaque inicial. */
+static void show_connect_list(App *app) {
+    UiConnectionEntry entries[CONNECTION_STORE_MAX];
+    for (int i = 0; i < app->store.count; i++) {
+        entries[i].host = app->store.items[i].host;
+        entries[i].port = app->store.items[i].port;
+        entries[i].password = app->store.items[i].password;
+    }
+    ui_show_connect_list(app->ui, entries, app->store.count, 0);
+}
+
 static void on_session_frame(int width, int height, const uint32_t *argb32_pixels,
                               void *user_data) {
     App *app = user_data;
+    if (app->connecting_first_frame) {
+        /* primeiro frame de verdade depois de um pedido de conexão do usuário — é o
+         * único sinal confiável de que o servidor respondeu (TCP+handshake sozinhos não
+         * bastam, ver ui_show_session em ui.h). Só agora vale persistir no histórico. */
+        app->connecting_first_frame = false;
+        connection_store_touch(&app->store, app->host, app->port, app->password);
+        if (!connection_store_save(&app->store, app->store_path)) {
+            g_printerr("kindow: não consegui salvar o histórico de conexões em %s\n",
+                       app->store_path);
+        }
+        ui_show_session(app->ui);
+    }
     ui_show_frame(app->ui, width, height, argb32_pixels);
 }
 
@@ -120,6 +164,10 @@ static void on_ui_action(MenuAction action, void *user_data) {
     case MENU_ACTION_SCROLL_LINES_OUT:
         handle_scroll_lines(app, -1);
         break;
+    case MENU_ACTION_DISCONNECT:
+        session_disconnect(app->session);
+        show_connect_list(app);
+        break;
     case MENU_ACTION_NONE:
         break;
     }
@@ -161,6 +209,51 @@ static void on_ui_right_click(void *user_data) {
     session_send_right_click(app->session);
 }
 
+/* Quantas falhas de tentativa SEGUIDAS antes de trocar o "Conectando..." pelo aviso de
+ * erro (item 9). 2 dá uma chance a uma falha transitória (WiFi piscou) sem deixar o
+ * usuário olhando uma tela parada por muito tempo — com o retry de 2s do session.c, o
+ * aviso aparece ~2-4s depois do toque. A sessão continua tentando mesmo depois do
+ * aviso; se vingar, a tela normal aparece sozinha. */
+#define CONNECT_FAILURES_BEFORE_ERROR 2
+
+static void on_session_attempt_failed(int consecutive_failures, const char *error,
+                                      void *user_data) {
+    App *app = user_data;
+    if (!app->connecting_first_frame) {
+        return; /* queda de sessão já estabelecida: o retry silencioso de sempre — a
+                 * tela continua mostrando o último frame, sem tela de erro por cima */
+    }
+    if (consecutive_failures >= CONNECT_FAILURES_BEFORE_ERROR) {
+        ui_show_connect_error(app->ui, error);
+    }
+}
+
+/* Tela de conexão (item 5, 27/08): disparado ao tocar uma linha da lista ou confirmar o
+ * formulário "+" — nos dois casos é um pedido de conexão a um Pi ainda não confirmado
+ * (só vira sessão de fato quando on_session_frame vir o primeiro frame). */
+static void on_ui_connect_request(const char *host, int port, const char *password,
+                                  void *user_data) {
+    App *app = user_data;
+    snprintf(app->host, sizeof(app->host), "%s", host);
+    app->port = port;
+    snprintf(app->password, sizeof(app->password), "%s", password ? password : "");
+    app->remote = (RemoteZoom){0}; /* valores de zoom são por-Pi, o cache antigo não serve */
+    app->connecting_first_frame = true;
+    /* ui_show_connecting ANTES de session_connect: a primeira tentativa (e a primeira
+     * falha, se houver) acontece SÍNCRONA dentro de session_connect — a tela de
+     * conectando precisa já estar armada pra ui_show_connect_error dela não ser
+     * descartado (ver o guard `if (!ui->connecting)` em ui.c). */
+    ui_show_connecting(app->ui, host, port);
+    session_connect(app->session, host, port, password);
+}
+
+static void on_ui_back(void *user_data) {
+    App *app = user_data;
+    session_disconnect(app->session);
+    app->connecting_first_frame = false;
+    show_connect_list(app);
+}
+
 /* Gatilho de debug: `kill -HUP <pid>` imprime o estado atual da conexão no log — útil pra
  * confirmar via SSH que o app está vivo e conectado sem precisar tocar a tela física.
  * SIGHUP em vez de SIGUSR1 porque o glib desse sysroot só aceita SIGHUP/SIGINT/SIGTERM em
@@ -180,11 +273,10 @@ static gboolean on_quit_signal(gpointer user_data) {
 int main(int argc, char **argv) {
     gtk_init(&argc, &argv);
 
-    const char *host = argc > 1 ? argv[1] : "192.168.0.155";
-    int port = argc > 2 ? atoi(argv[2]) : 5901;
-
     App app = {0};
-    app.host = host;
+    snprintf(app.store_path, sizeof(app.store_path), "%s/connections.txt",
+             kindle_platform_data_dir());
+    connection_store_load(&app.store, app.store_path);
 
     g_unix_signal_add_watch_full(SIGHUP, G_PRIORITY_DEFAULT, on_status_signal, &app, NULL);
     /* SIGTERM é o que o `kill` do fluxo de deploy manda — sem tratar, o processo morre sem
@@ -195,23 +287,38 @@ int main(int argc, char **argv) {
     kindle_platform_keep_awake(true);
 
     app.ui = ui_create(kindle_platform_window_title(), on_ui_click, on_ui_key, on_ui_action,
-                        on_ui_bar, on_ui_resize, on_ui_drag, on_ui_right_click, &app);
+                        on_ui_bar, on_ui_resize, on_ui_drag, on_ui_right_click,
+                        on_ui_connect_request, on_ui_back, &app);
     if (!app.ui) {
         g_printerr("kindow: sem memória pra criar a UI\n");
         kindle_platform_keep_awake(false);
         return 1;
     }
     /* O alvo do resize remoto é a ÁREA ÚTIL (tela menos a faixa do teclado) — o servidor
-     * renderiza exatamente o espaço disponível, 1:1, sem escala nem corte. */
-    app.session = session_start(host, port, ui_frame_width(app.ui), ui_frame_height(app.ui),
-                                (SessionCallbacks){.on_frame = on_session_frame,
-                                                   .user_data = &app});
+     * renderiza exatamente o espaço disponível, 1:1, sem escala nem corte. Sem host
+     * nenhum ainda (ver tela de conexão abaixo): session_create só reserva o alvo, quem
+     * decide A QUEM conectar agora é o usuário, tocando a lista ou o "+". */
+    app.session = session_create(
+        ui_frame_width(app.ui), ui_frame_height(app.ui),
+        (SessionCallbacks){.on_frame = on_session_frame,
+                           .on_connect_attempt_failed = on_session_attempt_failed,
+                           .user_data = &app});
     if (!app.session) {
-        /* só acontece por falta de memória (falha de rede a sessão re-tenta sozinha) */
+        /* só acontece por falta de memória */
         g_printerr("kindow: sem memória pra iniciar a sessão\n");
         kindle_platform_keep_awake(false);
         ui_destroy(app.ui);
         return 1;
+    }
+
+    if (argc > 1) {
+        /* atalho de dev/teste (mesmo papel do argv de antes da tela de conexão existir):
+         * pula a lista e conecta direto no host passado na linha de comando. */
+        const char *host = argv[1];
+        int port = argc > 2 ? atoi(argv[2]) : 5901;
+        on_ui_connect_request(host, port, argc > 3 ? argv[3] : "", &app);
+    } else {
+        show_connect_list(&app);
     }
 
     gtk_main();

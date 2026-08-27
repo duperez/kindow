@@ -125,15 +125,28 @@ de desempate, **o que é mais simples de fazer**:
    `PanelMode`/`MenuAction` em `ui.c`). **Sair da aplicação** ✓, **zoom em 3 camadas
    independentes** ✓ (sem mudança nessa parte, ver `pi/kindow-helperd`).
 
+   **Ajuste (27/08, tarde) — botão "Menu" vira "Sair" sem sessão ativa**: substituiu o
+   desenho anterior de bloquear o toque no botão "Menu" enquanto não havia sessão (não
+   fazia sentido abrir o painel de menu na tela de conexão) — sem uma saída, o usuário
+   ficava PRESO na tela de conexão, sem nenhum jeito de sair do app antes de conectar
+   (achado do usuário). Agora, sem sessão ativa, o mesmo botão da barra mostra "Sair" e
+   fecha a aplicação em vez de abrir o painel de menu (`draw_bar` em `ui.c`); com sessão
+   ativa o botão continua "Menu", sem mudança de comportamento. Itens do painel de menu
+   também ganharam feedback de toque (pedido do usuário) — piscam ao toque
+   (`FLASH_MENU_ITEM`), mesmo mecanismo já usado nas teclas do teclado (item 1 acima).
+
    **Mostrar/esconder o teclado** ✓ feito também (27/08) — mas não por gesto como esse
    item previa: virou o botão "Teclado" da mesma barra, no mesmo state machine do menu
    (mais confiável que gesto, mesmo padrão da sessão). `SetDesktopSize` é re-pedido a
    cada abertura/fechamento do painel (`session_set_target_size`), então a área do frame
    realmente cresce/encolhe, não só o desenho.
 
-   **Ainda pendente**: desconectar do Pi e conectar em outro (pedindo IP/porta e demais
-   dados necessários), lembrando os dados da última sessão (persistência local em
-   `/mnt/us/kindow/`).
+   **Ainda pendente, feito depois (27/08, tarde)**: desconectar do Pi e conectar em
+   outro, lembrando os dados de sessões anteriores — item "Desconectar do Pi" no menu
+   (`MENU_ACTION_DISCONNECT`) chama `session_disconnect` e volta pra tela de conexão via
+   `show_connect_list`, que já reconstrói a lista a partir do histórico persistido
+   (`connection_store`, ver item 10 abaixo). Entregue como parte do trabalho de
+   persistência/senha do item 10, não como item isolado.
 
    **Etapa 5 da reestrutura de UI — feito e validado (27/08)**: `BAR_HEIGHT_PX` (60px
    fixos) virou `BAR_HEIGHT_PERCENT` (4% da altura da tela, com piso de 40px pra telas
@@ -184,6 +197,100 @@ de desempate, **o que é mais simples de fazer**:
 8. **Kindle como segunda tela de verdade** — a mais incerta de todas (pode ser beco sem
    saída com ferramentas padrão), ver seção detalhada abaixo. Só atacar com pesquisa
    exploratória honesta antes de qualquer implementação.
+
+## Registrado em 27/08 (tarde) — pendências da tela de conexão e do empacotamento
+
+Os três itens abaixo (9, 10, 11) foram **implementados e validados no hardware pelo
+usuário na mesma tarde de 27/08** — a fila original (não ordenados entre si nem contra
+1-8) virou "feito" antes mesmo de ser atacada em ordem. Os dois "Investigar" que seguem
+continuam pendentes, sem mudança de código.
+
+9. ~~**Feedback visual de erro na tela "Conectando..."**~~ — **feito e validado
+   (27/08)**. `session.c` ganhou o callback `on_connect_attempt_failed`, que conta
+   falhas seguidas (`consecutive_failures`, zerado a cada sucesso) e reporta o motivo a
+   cada tentativa. `main.c` troca a mensagem via `ui_show_connect_error` só a partir da
+   2ª falha seguida (`CONNECT_FAILURES_BEFORE_ERROR`, ~2-4s considerando o retry de 2s
+   já existente) — antes disso a tela normal de "Conectando..." continua, pra não
+   piscar erro numa demora de rede momentânea. A sessão continua tentando em segundo
+   plano mesmo com a mensagem de erro na tela: se uma tentativa posterior vingar, a tela
+   de conexão normal volta sozinha. "Voltar" continua disponível o tempo todo.
+
+10. ~~**Suporte e alerta pra senha de VNC**~~ — **feito e validado com servidor real
+    (27/08)**. O formulário "+" ganhou uma 3ª fileira com campo Senha mascarado (`*`,
+    vazio = sem senha). `vnc_client.c` registra o `GetPassword` da libvncclient — a
+    senha precisa existir ANTES de conectar, porque esse callback é síncrono e disparado
+    no MEIO do handshake (`InitialiseRFBConnection`), por isso o campo fica no
+    formulário em vez de virar um prompt separado. Mensagens de erro específicas:
+    "este servidor VNC exige senha..." (sem senha preenchida) e "servidor
+    provavelmente recusou a senha" (senha errada — o "provavelmente" é honesto: numa
+    janela estreita do handshake a falha pode ser de rede, não de senha, e o código não
+    tem como distinguir os dois casos com certeza). A senha persiste no
+    `connection_store` como 3º token opcional do formato de texto ("host porta
+    [senha]", retrocompatível com arquivos antigos sem senha), em **texto simples** —
+    decisão consciente de 27/08: o firmware do Kindle não tem keychain/storage seguro, e
+    quem tem SSH ou acesso físico ao device já lê qualquer arquivo do cartão de qualquer
+    jeito; ver comentário em `connection_store.h`. Validado de ponta a ponta contra um
+    `Xtigervnc` temporário com VncAuth rodando no Pi (porta 5902): sem senha contra
+    servidor que exige → mensagem específica ✓; senha errada → recusa (com blacklist
+    temporário do TigerVNC gerando mensagens genéricas intermitentes — comportamento do
+    servidor, não bug do cliente) ✓; senha certa → conectou, frames fluindo, persistiu
+    no histórico ✓. `test_connection_store.c` tem 21 casos, incluindo senha no limite de
+    tamanho, truncamento, token extra, eviction preservando senha, round-trip e
+    retrocompatibilidade com arquivos sem senha.
+
+    **Ideia registrada (27/08) — criptografar a senha no arquivo**: hoje é texto
+    simples por decisão consciente (ver acima). Criptografar exigiria decidir ONDE
+    guardar a chave num firmware sem keychain — sem isso, na prática seria só
+    ofuscação (quem tem acesso ao arquivo da senha cifrada também teria acesso à chave
+    guardada do lado), valor de segurança limitado. Fica como ideia a considerar, não
+    como plano — não há decisão de implementar isso ainda.
+
+11. ~~**Pacote/launcher pra abrir sem SSH**~~ — **feito e validado (27/08)**, mas o
+    mecanismo NÃO é KUAL como este item previa: KUAL não está disponível nesse
+    jailbreak (confirmado no projeto irmão `kindle/`, `docs/findings/appmgrd-return-to-dashboard.md`
+    de lá — o repositório oficial desse jailbreak só tem koreader/kpm/kompanion/kterm,
+    KUAL é "Legacy"). O caminho real foi um **scriptlet** (`kindle/kindow.sh`, novo no
+    repo): um `.sh` com cabeçalho `# Name: Kindow` copiado pra
+    `/mnt/us/documents/` aparece tocável na biblioteca do Kindle, mesmo mecanismo do
+    `pet_dashboard`/`kterm` oficiais. Dois achados reais no caminho: (a) `setsid` +
+    `nohup` são necessários — quem executa o `.sh` via scriptlet é um processo interno
+    do jailbreak, e o fim dele derruba o grupo de processos sem esse desacoplamento;
+    (b) o pulo do gato: um `sleep 3` ANTES do `exec`, dentro do subshell — quando o
+    script termina, o framework do Kindle "volta pra Home", redesenhando-a POR CIMA de
+    tudo; sem o delay, a janela do Kindow (que mapeia quase instantaneamente, é a tela
+    de conexão local sem rede) aparecia por ~1s e era coberta logo em seguida (o
+    `pet_dashboard` escapa por acaso — demora mais pra subir porque busca dados na rede
+    antes). Também novo: `kindle/deploy.sh` (build → scp do binário + libvncclient +
+    scriptlet → relança o processo, uso: `./kindle/deploy.sh <ip>`).
+
+### Investigar: recuperação do screensaver em crash abrupto (SIGKILL/kernel panic)
+
+O app desativa o screensaver do Kindle no início (`lipc-set-prop -i com.lab126.powerd
+preventScreenSaver 1`, `kindle_platform_keep_awake(true)`) e restaura no encerramento
+limpo — `SIGTERM`/`SIGINT` tratados via `g_unix_signal_add_watch_full`, mais o
+`gtk_main_quit` do fechamento de janela, todos passando pela limpeza pós-`gtk_main`
+(`kindle_platform_keep_awake(false)`). `SIGKILL` (ou um crash que mate o processo sem
+rodar handler nenhum) pula essa limpeza — a trava de screensaver fica presa em "1" até
+reboot ou reversão manual (`lipc-set-prop -i com.lab126.powerd preventScreenSaver 0`).
+A perguntar antes de decidir o que fazer: vale só documentar o comando de emergência
+(ex. num README do lado do Pi/Kindle), ou vale um script de verificação/reset rodado no
+boot do Kindle (ex. via upstart) que zera a trava se o `kindow-client` não estiver
+rodando? A segunda opção evita depender do usuário lembrar do comando manual, mas é
+mais código novo pra um cenário que só acontece em crash/kill -9, não no uso normal.
+
+### Investigar: dithering espacial na conversão de escala de cinza
+
+`app/src/pixel_convert.c` converte as cores recebidas do Pi pra escala de cinza
+matematicamente "perfeita" (256 níveis), mas o painel físico do Kindle só distingue de
+verdade uns 16 níveis (4 bits) — a conversão 1:1 de hoje não faz dithering nenhum
+(Floyd-Steinberg, Bayer/ordered dithering, etc.), então gradientes e sombras da UI do
+desktop remoto (ex. sombra de janela do Openbox, ícones com transparência) podem sair
+com "faixas" duras de transição de tom em vez de um degradê suave. Precisa validar
+primeiro se isso é perceptível de verdade no hardware (o e-ink já tem um jeito
+particular de renderizar cinza que pode mascarar ou acentuar o banding, não dá pra
+saber só olhando o código) antes de decidir se vale a complexidade de um dithering
+pré-calculado na LUT — achado a confirmar visualmente no device antes de qualquer
+implementação, mesmo espírito de honestidade das outras seções deste arquivo.
 
 ## Exploratórias (detalhes dos itens 7 e 8)
 

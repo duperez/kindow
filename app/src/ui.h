@@ -50,6 +50,9 @@ typedef enum {
      * — ver session_set_scroll_lines). Etapa 4 da reestrutura de UI, 27/08. */
     MENU_ACTION_SCROLL_LINES_IN,
     MENU_ACTION_SCROLL_LINES_OUT,
+    /* Derruba a sessão atual e volta pra tela de conexão (ver ui_show_connect_list) —
+     * não mexe no histórico salvo, só sai da sessão ativa. */
+    MENU_ACTION_DISCONNECT,
 } MenuAction;
 
 typedef void (*UiActionFn)(MenuAction action, void *user_data);
@@ -88,13 +91,60 @@ typedef void (*UiDragFn)(int x, int y, bool held, void *user_data);
  * session_send_right_click). */
 typedef void (*UiRightClickFn)(void *user_data);
 
-/* Cria e mostra a janela em tela cheia, com o teclado e a barra já reservados (estado
- * inicial: painel em modo teclado, igual ao comportamento de antes da barra existir).
- * window_title vem do chamador porque o formato é exigência da plataforma (ver
- * kindle_platform_window_title), não decisão de UI. */
+/* Uma entrada da lista de conexões já usadas, só pra exibição/reuso — a UI não sabe nem
+ * precisa saber de onde isso vem (histórico persistido é responsabilidade de quem
+ * chama, ver connection_store.h). Os ponteiros são copiados internamente; só precisam
+ * valer durante a chamada de ui_show_connect_list. password NULL ou "" = sem senha (a
+ * senha nunca é EXIBIDA na lista — só viaja de volta no on_connect_request quando a
+ * entrada é tocada). */
+typedef struct {
+    const char *host;
+    int port;
+    const char *password;
+} UiConnectionEntry;
+
+/* Disparado ao selecionar uma entrada da lista OU ao confirmar o formulário "+" — nos
+ * dois casos o chamador decide o que "conectar" significa (ver session_connect) e chama
+ * ui_show_connecting em seguida. password "" = sem senha. */
+typedef void (*UiConnectRequestFn)(const char *host, int port, const char *password,
+                                   void *user_data);
+
+/* Disparado pelo botão "Voltar" da tela de conectando — o chamador decide o que
+ * cancelar significa (ver session_disconnect) e chama ui_show_connect_list em seguida. */
+typedef void (*UiBackFn)(void *user_data);
+
+/* Cria a janela em tela cheia. O app agora começa SEM sessão ativa — quem decide qual
+ * tela mostrar primeiro é o chamador, via ui_show_connect_list/ui_show_connecting logo
+ * depois de ui_create (ver docs/ideias-futuras.md, item 5). window_title vem do chamador
+ * porque o formato é exigência da plataforma (ver kindle_platform_window_title), não
+ * decisão de UI. */
 Ui *ui_create(const char *window_title, UiClickFn on_click, UiKeyFn on_key,
               UiActionFn on_action, UiBarFn on_bar, UiResizeFn on_resize, UiDragFn on_drag,
-              UiRightClickFn on_right_click, void *user_data);
+              UiRightClickFn on_right_click, UiConnectRequestFn on_connect_request,
+              UiBackFn on_back, void *user_data);
+
+/* Mostra a lista de conexões salvas (mais recente primeiro) + uma linha "+" pra
+ * adicionar uma nova via teclado. selected_index é só destaque visual inicial (ex.: a
+ * mais recente) — não confirma sozinho, o usuário ainda precisa tocar a linha ou o "+".
+ * Chamar depois de ui_create e sempre que MENU_ACTION_DISCONNECT ou UiBackFn disparar. */
+void ui_show_connect_list(Ui *ui, const UiConnectionEntry *entries, int count,
+                          int selected_index);
+
+/* Mostra "Conectando a host:porta..." com um botão de voltar (ver UiBackFn). Chamar
+ * logo após pedir a conexão (UiConnectRequestFn), antes de saber se ela vai vingar. */
+void ui_show_connecting(Ui *ui, const char *host, int port);
+
+/* Troca a mensagem da tela de conectando por um aviso de erro (item 9 de
+ * docs/ideias-futuras.md): "Não foi possível conectar..." + o motivo (detail, curto —
+ * uma linha, sem quebra; NULL omite). Só tem efeito com a tela de conectando ativa; a
+ * sessão continua re-tentando em segundo plano — se uma tentativa futura vingar,
+ * ui_show_session limpa isso sozinho, e ui_show_connecting (conexão nova) também. */
+void ui_show_connect_error(Ui *ui, const char *detail);
+
+/* Volta pra tela normal (frame + barra + painel) — chamar quando o primeiro frame da
+ * conexão nova chega de verdade (ver ui_show_frame), nunca antes: é o único sinal
+ * confiável de que o servidor respondeu, TCP+handshake sozinhos não bastam. */
+void ui_show_session(Ui *ui);
 
 /* Área útil pro frame remoto: a tela real (detectada em runtime — o mesmo binário serve
  * qualquer modelo de Kindle) MENOS a barra e, se o painel estiver aberto, a faixa dele. É

@@ -1,7 +1,9 @@
 #include "kindle_platform.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 /* Mantém o Kindle acordado só enquanto este app está na tela — mesmo padrão (e mesma
  * justificativa) do pet_dashboard no projeto irmão `kindle`, ver
@@ -28,4 +30,12 @@ void kindle_platform_keep_awake(bool awake) {
  * com o processo rodando normalmente. */
 const char *kindle_platform_window_title(void) {
     return "L:A_N:application_ID:com.eduardo.kindowclient_PC:N";
+}
+
+const char *kindle_platform_data_dir(void) {
+    static const char *path = "/mnt/us/kindow";
+    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+        fprintf(stderr, "kindow: não consegui criar %s (errno=%d)\n", path, errno);
+    }
+    return path;
 }

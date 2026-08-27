@@ -12,6 +12,7 @@ sources = files(
     'src/remote_control.c',
     'src/vnc_client.c',
     'src/pixel_convert.c',
+    'src/connection_store.c',
 )
 
 executable('kindow-client', sources, dependencies: [gtk_dep, vnc_dep])
@@ -33,3 +34,12 @@ test_keyboard = executable(
     include_directories: include_directories('src'),
 )
 test('keyboard', test_keyboard)
+
+# connection_store.c é lógica pura (sem GTK, sem libvncclient, sem I/O além do próprio
+# arquivo que recebe como parâmetro) — ver app/tests/test_connection_store.c.
+test_connection_store = executable(
+    'test-connection-store',
+    files('src/connection_store.c', 'tests/test_connection_store.c'),
+    include_directories: include_directories('src'),
+)
+test('connection_store', test_connection_store)

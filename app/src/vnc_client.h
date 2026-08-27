@@ -27,9 +27,14 @@ typedef struct VncClient VncClient;
 typedef void (*VncFrameReadyFn)(int width, int height, const uint32_t *argb32_pixels,
                                  void *user_data);
 
-/* Conecta e faz o handshake RFB completo. Retorna NULL em caso de erro, preenchendo
- * *out_error com uma mensagem (chamador deve dar free()). */
-VncClient *vnc_client_connect(const char *host, int port, char **out_error);
+/* Conecta e faz o handshake RFB completo. password: senha de VNC Authentication
+ * clássica, ou NULL/"" pra servidor sem senha (o Xvnc deste projeto usa
+ * SecurityTypes=None) — se o servidor EXIGIR senha e nenhuma for dada, o handshake
+ * falha com uma mensagem explicando isso (em vez do genérico "handshake falhou").
+ * Retorna NULL em caso de erro, preenchendo *out_error com uma mensagem (chamador deve
+ * dar free()). */
+VncClient *vnc_client_connect(const char *host, int port, const char *password,
+                              char **out_error);
 
 /* Fd do socket RFB já conectado, pra o chamador integrar no próprio loop de eventos e
  * saber quando chamar vnc_client_handle_messages. */

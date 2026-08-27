@@ -17,6 +17,10 @@
 struct Session {
     char *host;
     int port;
+    char *password; /* NULL ou "" = sem senha (ver vnc_client_connect) */
+    /* Falhas de conexão seguidas desde o último sucesso — alimenta o callback
+     * on_connect_attempt_failed (feedback de erro na tela "Conectando...", item 9). */
+    int consecutive_failures;
     /* Tamanho real da tela local (vem do chamador, que é quem conhece o display) — alvo do
      * pedido de resize remoto. */
     int target_width;
@@ -77,6 +81,28 @@ static void handle_connection_lost(Session *session) {
     schedule_retry(session);
 }
 
+/* Para tudo (watch, timer de retry, conexão aberta) sem mexer em session->host — usada
+ * tanto por session_disconnect (que ainda zera o host) quanto por session_connect (que
+ * troca o host logo em seguida). Diferente de handle_connection_lost, pode ser chamada
+ * de fora do watch do fd, por isso remove as sources explicitamente em vez de só zerar
+ * o id. */
+static void stop_trying(Session *session) {
+    if (session->watch_id) {
+        g_source_remove(session->watch_id);
+        session->watch_id = 0;
+    }
+    if (session->retry_id) {
+        g_source_remove(session->retry_id);
+        session->retry_id = 0;
+    }
+    if (session->client) {
+        vnc_client_disconnect(session->client);
+        session->client = NULL;
+    }
+    session->frame_width = 0;
+    session->frame_height = 0;
+}
+
 /* Registra o fd do cliente no loop do GLib. g_unix_fd_add não existe nesse glib do sysroot
  * (só a partir da 2.36) — GIOChannel/g_io_add_watch é a API disponível aqui. O canal não
  * deve fechar o fd sozinho (close_on_unref=FALSE): quem é dono do fd é o VncClient, fechado
@@ -89,22 +115,36 @@ static void watch_client_fd(Session *session) {
     g_io_channel_unref(channel);
 }
 
+/* Uma falha de tentativa: loga, conta, e avisa o chamador (se ele quiser saber) — o
+ * error é liberado aqui, depois do callback (que só o empresta durante a chamada). */
+static void report_attempt_failure(Session *session, char *error) {
+    session->consecutive_failures++;
+    g_printerr("kindow: %s\n", error ? error : "erro desconhecido");
+    if (session->callbacks.on_connect_attempt_failed) {
+        session->callbacks.on_connect_attempt_failed(session->consecutive_failures, error,
+                                                     session->callbacks.user_data);
+    }
+    free(error);
+}
+
 static gboolean try_connect(Session *session) {
     char *error = NULL;
     session->resize_requested = false;
-    session->client = vnc_client_connect(session->host, session->port, &error);
+    session->client = vnc_client_connect(session->host, session->port, session->password,
+                                         &error);
     if (!session->client) {
-        report_error_and_free(error);
+        report_attempt_failure(session, error);
         return FALSE;
     }
 
     if (!vnc_client_start_updates(session->client, &error)) {
-        report_error_and_free(error);
+        report_attempt_failure(session, error);
         vnc_client_disconnect(session->client);
         session->client = NULL;
         return FALSE;
     }
 
+    session->consecutive_failures = 0;
     watch_client_fd(session);
     return TRUE;
 }
@@ -168,27 +208,44 @@ static gboolean on_socket_ready(GIOChannel *source, GIOCondition condition, gpoi
     return TRUE;
 }
 
-Session *session_start(const char *host, int port, int target_width, int target_height,
-                       SessionCallbacks callbacks) {
+Session *session_create(int target_width, int target_height, SessionCallbacks callbacks) {
     Session *session = calloc(1, sizeof(Session));
     if (!session) {
         return NULL;
     }
-    session->host = strdup(host);
-    if (!session->host) {
-        free(session);
-        return NULL;
-    }
-    session->port = port;
     session->target_width = target_width;
     session->target_height = target_height;
     session->callbacks = callbacks;
     session->scroll_lines = 1;
+    /* host fica NULL até session_connect — nasce sem alvo, ver tela de conexão */
+    return session;
+}
 
+void session_disconnect(Session *session) {
+    stop_trying(session);
+    free(session->host);
+    session->host = NULL;
+    free(session->password);
+    session->password = NULL;
+    session->consecutive_failures = 0;
+}
+
+void session_connect(Session *session, const char *host, int port, const char *password) {
+    session_disconnect(session); /* limpa qualquer tentativa/conexão anterior primeiro */
+    session->host = strdup(host);
+    if (!session->host) {
+        return; /* sem memória: fica sem host, equivalente a nunca ter conectado */
+    }
+    session->password = strdup(password ? password : "");
+    if (!session->password) {
+        free(session->host);
+        session->host = NULL;
+        return;
+    }
+    session->port = port;
     if (!try_connect(session)) {
         schedule_retry(session);
     }
-    return session;
 }
 
 void session_send_click(Session *session, int x, int y) {
@@ -305,15 +362,8 @@ void session_shutdown(Session *session) {
     if (!session) {
         return;
     }
-    if (session->watch_id) {
-        g_source_remove(session->watch_id);
-    }
-    if (session->retry_id) {
-        g_source_remove(session->retry_id);
-    }
-    if (session->client) {
-        vnc_client_disconnect(session->client);
-    }
+    stop_trying(session);
     free(session->host);
+    free(session->password);
     free(session);
 }

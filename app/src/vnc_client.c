@@ -18,6 +18,14 @@ struct VncClient {
      * documentação sozinha já quase foi violada uma vez (um handler de sinal chamando de
      * novo, pego em review); melhor o próprio módulo recusar do que confiar no comentário. */
     bool updates_started;
+    /* Senha pro handshake (VNC Authentication clássica) — "" = sem senha. Guardada aqui
+     * porque o GetPassword da lib é um callback síncrono disparado no MEIO de
+     * InitialiseRFBConnection: a senha precisa existir antes de conectar, não dá pra
+     * perguntar ao usuário na hora (por isso o campo no formulário de conexão, ver ui.c). */
+    char password[64];
+    /* true se o servidor pediu senha durante o handshake — permite uma mensagem de erro
+     * específica ("este servidor exige senha") em vez do genérico "handshake falhou". */
+    bool password_requested;
 };
 
 /* Qualquer endereço único serve de "tag" pra rfbClientSetClientData/GetClientData. */
@@ -55,6 +63,24 @@ static void on_finished_update(rfbClient *rfb) {
  * um "ack" sem conteúdo, antes do frame de verdade chegar num segundo burst. Sem isso,
  * vnc_client_handle_messages consideraria a busca completa cedo demais e devolveria um
  * framebuffer inteiramente zerado (preto). */
+/* Chamado pela lib no meio do handshake quando o servidor anuncia VNC Authentication.
+ * A lib dá free() no retorno (ver HandleVncAuth em rfbclient.c), por isso o strdup.
+ * Retornar NULL aborta a autenticação — é o que acontece quando o servidor exige senha
+ * e o usuário não deu nenhuma (password_requested fica marcado pra mensagem de erro
+ * específica em vnc_client_connect). O default da lib (prompt no terminal) bloquearia
+ * pra sempre no Kindle, onde não há stdin interativo. */
+static char *on_get_password(rfbClient *rfb) {
+    VncClient *self = rfbClientGetClientData(rfb, (void *)kClientDataTag);
+    if (!self) {
+        return NULL;
+    }
+    self->password_requested = true;
+    if (!self->password[0]) {
+        return NULL;
+    }
+    return strdup(self->password);
+}
+
 static void on_got_update(rfbClient *rfb, int x, int y, int w, int h) {
     (void)x;
     (void)y;
@@ -67,7 +93,8 @@ static void on_got_update(rfbClient *rfb, int x, int y, int w, int h) {
     }
 }
 
-VncClient *vnc_client_connect(const char *host, int port, char **out_error) {
+VncClient *vnc_client_connect(const char *host, int port, const char *password,
+                              char **out_error) {
     rfbClient *rfb = rfbGetClient(8, 3, 4);
     if (!rfb) {
         set_error(out_error, "rfbGetClient falhou");
@@ -92,10 +119,12 @@ VncClient *vnc_client_connect(const char *host, int port, char **out_error) {
         return NULL;
     }
     self->rfb = rfb;
+    snprintf(self->password, sizeof(self->password), "%s", password ? password : "");
 
     rfb->MallocFrameBuffer = on_malloc_framebuffer;
     rfb->GotFrameBufferUpdate = on_got_update;
     rfb->FinishedFrameBufferUpdate = on_finished_update;
+    rfb->GetPassword = on_get_password;
     rfbClientSetClientData(rfb, (void *)kClientDataTag, self);
 
     if (!ConnectToRFBServer(rfb, host, port)) {
@@ -106,7 +135,18 @@ VncClient *vnc_client_connect(const char *host, int port, char **out_error) {
     }
 
     if (!InitialiseRFBConnection(rfb)) {
-        set_error(out_error, "handshake RFB falhou");
+        if (self->password_requested) {
+            /* "provavelmente": password_requested marca que o servidor PEDIU senha, não
+             * que a resposta foi lida — numa janela estreita (rede caindo no meio da
+             * leitura do resultado da autenticação), a falha é de rede, não de senha
+             * (achado de review, 27/08). A tentativa seguinte do retry esclarece. */
+            set_error(out_error, self->password[0]
+                                      ? "servidor provavelmente recusou a senha de VNC"
+                                      : "este servidor VNC exige senha — preencha o campo "
+                                        "Senha no formulário de conexão");
+        } else {
+            set_error(out_error, "handshake RFB falhou");
+        }
         rfbClientCleanup(rfb);
         free(self);
         return NULL;

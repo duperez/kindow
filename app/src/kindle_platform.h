@@ -19,4 +19,10 @@ void kindle_platform_keep_awake(bool awake);
  * String estática — não liberar. */
 const char *kindle_platform_window_title(void);
 
+/* Diretório de dados persistentes do app (partição de usuário /mnt/us, sobrevive a
+ * reboot e atualização de firmware — diferente do resto do filesystem no jailbreak).
+ * Cria o diretório se ainda não existir (idempotente, seguro chamar toda vez que for
+ * usar). String estática — não liberar. */
+const char *kindle_platform_data_dir(void);
+
 #endif

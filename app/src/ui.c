@@ -1,6 +1,8 @@
 #include "ui.h"
 
 #include <gtk/gtk.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "keyboard.h"
@@ -53,23 +55,68 @@ static int proportional_border_width(int local_height) {
  * valor de partida, não medido. */
 #define DRAG_MIN_MOVE_PX 8
 
-/* O painel entre o frame e a barra: nada (frame estendido até a barra), teclado, ou menu
- * — mutuamente exclusivos, alternados pelos botões Teclado/Menu da barra (reestrutura de
- * 27/08). Teclado e menu reservam a MESMA altura (ver KEYBOARD_HEIGHT_PERCENT), então só
- * a transição nada<->algo muda o tamanho útil do frame. */
+#define CONNECT_HOST_BUF_LEN 64
+#define CONNECT_PORT_BUF_LEN 8
+#define CONNECT_PASSWORD_BUF_LEN 32
+#define CONNECT_ERROR_BUF_LEN 96
+
+typedef struct {
+    char host[CONNECT_HOST_BUF_LEN];
+    int port;
+    char password[CONNECT_PASSWORD_BUF_LEN]; /* "" = sem senha; nunca exibida na lista */
+} UiConnectDisplayEntry;
+#define UI_CONNECT_ENTRIES_MAX 8
+
+/* Qual campo do formulário "+" recebe o próximo toque de tecla. */
+typedef enum {
+    FORM_FIELD_HOST,
+    FORM_FIELD_PORT,
+    FORM_FIELD_PASSWORD,
+} FormField;
+
+/* Quantas linhas da lista de conexões cabem no painel de uma vez, sem rolar — reaproveita
+ * o mesmo ritmo visual do teclado (6 fileiras), em vez de uma proporção nova. Acima
+ * disso, os botões ↑/↓ da barra rolam a lista (ver handle_bar_tap) — mais simples que
+ * uma barra de rolagem própria, e esses botões já existem e ficam livres sem sessão
+ * ativa (reestrutura de 27/08, sugestão do usuário depois de testar a primeira versão). */
+#define CONNECT_LIST_VISIBLE_ROWS 6
+
+/* Fileiras de campos (IP/Porta) e botões (Conectar/Cancelar) do formulário "+", dentro
+ * da área do FRAME — mesma área que mostraria a tela do Pi (reestrutura de 27/08: a
+ * primeira versão desenhava um cabeçalho de tela cheia com proporção própria; ficou
+ * visualmente inconsistente com o resto do app, feedback do usuário depois de testar no
+ * device). 2 das 8 fileiras vão pros campos/botões, o resto do frame fica em branco. */
+#define CONNECT_FORM_FIELD_ROWS 8
+
+/* Largura do campo IP no formulário "+" — o resto vai pro campo Porta. IP costuma ser
+ * bem mais longo de digitar/ler (dotted-quad) que a porta (4-5 dígitos), daí a divisão
+ * desigual em vez de 50/50 (achado de review: valor nomeado, não mágico inline). */
+#define CONNECT_FORM_IP_WIDTH_PERCENT 65
+
+/* O painel entre o frame e a barra: nada, teclado (sessão), menu (sessão), lista de
+ * conexões salvas, formulário "+" (mesma instância de Keyboard do teclado normal — só
+ * o destino dos eventos muda), ou "conectando..." com uma linha de voltar. As 3 últimas
+ * só existem sem sessão ativa (ver bool connected em struct Ui). Reestruturado em 27/08
+ * pra reaproveitar a MESMA área/geometria da sessão (frame + painel + barra) em vez de
+ * telas cheias próprias com proporções inventadas — era o desenho original da tela de
+ * conexão, mas ficou rudimentar/inconsistente com teclado e menu (feedback do usuário). */
 typedef enum {
     PANEL_NONE,
     PANEL_KEYBOARD,
     PANEL_MENU,
+    PANEL_CONNECT_LIST,
+    PANEL_CONNECT_FORM,
+    PANEL_CONNECTING,
 } PanelMode;
 
-/* De onde veio o índice em flash — teclado e barra têm esquemas de geometria diferentes
- * (keyboard_key_view vs. segmento fixo), então o mesmo índice numérico significa coisas
- * diferentes dependendo da origem. */
+/* De onde veio o índice em flash — teclado (sessão OU formulário "+", mesma instância) e
+ * barra têm esquemas de geometria diferentes, então o mesmo índice numérico significa
+ * coisas diferentes dependendo da origem. */
 typedef enum {
     FLASH_NONE,
     FLASH_KEYBOARD_KEY,
     FLASH_BAR_BUTTON,
+    FLASH_MENU_ITEM,
 } FlashSource;
 
 struct Ui {
@@ -78,8 +125,9 @@ struct Ui {
     cairo_surface_t *surface;
     int screen_width;
     int screen_height;
-    /* y onde o painel (teclado/menu) começa — == altura útil pro frame remoto. Igual a
-     * bar_top quando panel_mode é PANEL_NONE (painel sem altura reservada). */
+    /* y onde o painel (teclado/menu/tela de conexão) começa — == altura útil pro frame
+     * remoto. Igual a bar_top quando panel_mode é PANEL_NONE (painel sem altura
+     * reservada). */
     int keyboard_top;
     /* y onde a barra fixa começa — sempre screen_height - BAR_HEIGHT_PX, nunca muda em
      * runtime (diferente de keyboard_top, que alterna com o painel). */
@@ -93,7 +141,37 @@ struct Ui {
     UiResizeFn on_resize;
     UiDragFn on_drag;
     UiRightClickFn on_right_click;
+    UiConnectRequestFn on_connect_request;
+    UiBackFn on_back;
     void *callback_user_data;
+
+    /* Tela de conexão (item 5, 27/08). connected=true é o único sinal de "existe sessão
+     * de verdade" — decide o que a área do FRAME mostra (pixels do Pi vs. algo local).
+     * connecting=true é INDEPENDENTE de panel_mode (sobrevive ao toggle Teclado
+     * escondendo o painel) — só controla a mensagem "Conectando..." no frame.
+     * pre_connect_panel lembra qual sub-tela (lista ou formulário) volta quando o
+     * Teclado é re-ativado depois de escondido, e também decide se o FRAME mostra os
+     * campos do formulário — pelo mesmo motivo de connecting, isso não deve sumir só
+     * porque o painel foi escondido. */
+    bool connected;
+    bool connecting;
+    PanelMode pre_connect_panel;
+    UiConnectDisplayEntry connect_entries[UI_CONNECT_ENTRIES_MAX];
+    int connect_entry_count;
+    int connect_selected_index; /* destaque visual (MRU) — não confirma sozinho */
+    int connect_scroll_offset;  /* índice da 1ª entrada visível — rolada pelos botões
+                                  * ↑/↓ da barra, reaproveitados sem sessão ativa */
+    char form_host[CONNECT_HOST_BUF_LEN];
+    char form_port[CONNECT_PORT_BUF_LEN];
+    char form_password[CONNECT_PASSWORD_BUF_LEN];
+    FormField form_active;
+    char connecting_host[CONNECT_HOST_BUF_LEN];
+    int connecting_port;
+    /* Erro da tela de conectando (item 9) — "" = sem erro, mostrando o "Conectando..."
+     * normal. Setado por ui_show_connect_error, limpo por ui_show_connecting (conexão
+     * nova) e ui_show_session (deu certo afinal). */
+    char connecting_error[CONNECT_ERROR_BUF_LEN];
+
     /* Etapa 3 da reestrutura (27/08): true do toque inicial no frame (com o clique
      * esquerdo armado no teclado) até o dedo levantar da tela. Só existe um ponto de
      * contato possível nesse hardware, então enquanto isso é true, fisicamente não dá
@@ -141,7 +219,9 @@ static void draw_key_label(cairo_t *cr, const KeyboardKeyView *key) {
 
 /* Desenho do teclado: alto contraste pro e-ink — teclas brancas com borda preta, rótulo
  * preto; modificador armado (sticky Shift/Ctrl) invertido (fundo preto, texto branco),
- * que é o feedback de "armado" sem precisar de tons de cinza. */
+ * que é o feedback de "armado" sem precisar de tons de cinza. Reaproveitado tanto pra
+ * sessão real (PANEL_KEYBOARD) quanto pro formulário "+" (PANEL_CONNECT_FORM) — mesma
+ * instância de Keyboard, ver struct Ui e handle_panel_tap. */
 static void draw_keyboard(cairo_t *cr, const Ui *ui) {
     cairo_save(cr);
     cairo_translate(cr, 0, ui->keyboard_top);
@@ -204,7 +284,7 @@ typedef struct {
     MenuAction action;
 } MenuItem;
 
-#define MENU_ROWS 6
+#define MENU_ROWS 7
 
 static const MenuItem kMenuItems[] = {
     {0, 0.0f, 0.5f, "Apps  A-", MENU_ACTION_ZOOM_APPS_OUT},
@@ -217,8 +297,12 @@ static const MenuItem kMenuItems[] = {
      * — puramente client-side, não passa pelo kindow-helperd/Pi (ver session.c). */
     {3, 0.0f, 0.5f, "Scroll  A-", MENU_ACTION_SCROLL_LINES_OUT},
     {3, 0.5f, 1.0f, "Scroll  A+", MENU_ACTION_SCROLL_LINES_IN},
-    {4, 0.0f, 1.0f, "Status da conexão (log)", MENU_ACTION_STATUS},
-    {5, 0.0f, 1.0f, "Sair do Kindow", MENU_ACTION_QUIT},
+    /* Item 5 da fila (27/08): volta pra tela de conexão sem mexer no histórico salvo —
+     * linha isolada, mesmo raciocínio de Status/Sair (longe de toque acidental nos
+     * pares de zoom/scroll, que são os controles mais usados no dia a dia). */
+    {4, 0.0f, 1.0f, "Desconectar do Pi", MENU_ACTION_DISCONNECT},
+    {5, 0.0f, 1.0f, "Status da conexão (log)", MENU_ACTION_STATUS},
+    {6, 0.0f, 1.0f, "Sair do Kindow", MENU_ACTION_QUIT},
 };
 #define MENU_ITEM_COUNT (int)(sizeof(kMenuItems) / sizeof(kMenuItems[0]))
 
@@ -248,17 +332,31 @@ static void draw_menu(cairo_t *cr, const Ui *ui) {
         int w = (int)((item->x1 - item->x0) * ui->screen_width) - 2 * inset;
         int h = row_h - 2 * inset;
 
-        cairo_set_source_rgb(cr, 0, 0, 0);
-        cairo_set_line_width(cr, proportional_border_width(row_h));
-        cairo_rectangle(cr, x, y, w, h);
-        cairo_stroke(cr);
-        draw_centered_label(cr, x, y, w, h, item->label);
+        if (ui->flash_source == FLASH_MENU_ITEM && i == ui->flash_index) {
+            /* feedback de toque: pisca invertida, mesmo tratamento visual da tecla do
+             * teclado — pedido do usuário depois de notar que o menu disparava a ação
+             * sem indicar visualmente ONDE o toque caiu (27/08). */
+            cairo_set_source_rgb(cr, 0, 0, 0);
+            cairo_rectangle(cr, x, y, w, h);
+            cairo_fill(cr);
+            cairo_set_source_rgb(cr, 1, 1, 1);
+            draw_centered_label(cr, x, y, w, h, item->label);
+        } else {
+            cairo_set_source_rgb(cr, 0, 0, 0);
+            cairo_set_line_width(cr, proportional_border_width(row_h));
+            cairo_rectangle(cr, x, y, w, h);
+            cairo_stroke(cr);
+            draw_centered_label(cr, x, y, w, h, item->label);
+        }
     }
 
     cairo_restore(cr);
 }
 
-static const MenuItem *find_menu_item(const Ui *ui, int x, int y) {
+/* Índice em kMenuItems (não ponteiro) pra caber no mesmo esquema de FlashSource/
+ * flash_index das outras fontes de flash (tecla do teclado, botão da barra) — -1 se o
+ * toque não caiu em item nenhum. */
+static int find_menu_item_index(const Ui *ui, int x, int y) {
     int panel_h = ui->bar_top - ui->keyboard_top;
     int row_h = panel_h / MENU_ROWS;
     int row = y / row_h;
@@ -269,14 +367,19 @@ static const MenuItem *find_menu_item(const Ui *ui, int x, int y) {
         int x0 = (int)(kMenuItems[i].x0 * ui->screen_width);
         int x1 = (int)(kMenuItems[i].x1 * ui->screen_width);
         if (x >= x0 && x < x1) {
-            return &kMenuItems[i];
+            return i;
         }
     }
-    return NULL;
+    return -1;
 }
 
 /* Rótulos dos 4 botões, na mesma ordem do enum BarButton. Setas ↑/↓ já confirmadas
- * renderizando certo nesse device (mesma fonte do teclado) — ver kindle-hardware-test.md. */
+ * renderizando certo nesse device (mesma fonte do teclado) — ver kindle-hardware-test.md.
+ * "Teclado" mantém o mesmo rótulo mesmo sem sessão ativa (na prática alterna
+ * lista/formulário de conexão, não o teclado normal) — trocar dinamicamente não foi
+ * pedido. "Menu" é diferente: vira "Sair" sem sessão ativa (ver draw_bar) — achado do
+ * usuário, 27/08: sem isso o usuário ficava PRESO na tela de conexão, sem nenhum jeito
+ * de sair do app antes de conectar em algum lugar. */
 static const char *const kBarLabels[BAR_BUTTON_COUNT] = {"↑", "↓", "Teclado", "Menu"};
 
 /* Desenho da barra: mesmo estilo de alto contraste do teclado. Teclado/Menu ficam
@@ -304,6 +407,13 @@ static void draw_bar(cairo_t *cr, const Ui *ui) {
     int seg_w = ui->screen_width / BAR_BUTTON_COUNT;
     int inset = proportional_inset(bar_height);
     int border_w = proportional_border_width(bar_height);
+    /* "Teclado" fica destacado pra QUALQUER um dos conteúdos que ele alterna — teclado
+     * de verdade na sessão, ou lista/formulário/conectando sem sessão (ver PanelMode) —
+     * não só PANEL_KEYBOARD. */
+    bool keyboard_button_active = ui->panel_mode == PANEL_KEYBOARD ||
+                                  ui->panel_mode == PANEL_CONNECT_LIST ||
+                                  ui->panel_mode == PANEL_CONNECT_FORM ||
+                                  ui->panel_mode == PANEL_CONNECTING;
     for (int i = 0; i < BAR_BUTTON_COUNT; i++) {
         int x = i * seg_w + inset;
         int y = inset;
@@ -312,26 +422,250 @@ static void draw_bar(cairo_t *cr, const Ui *ui) {
         int w = (i == BAR_BUTTON_COUNT - 1 ? ui->screen_width - i * seg_w : seg_w) - 2 * inset;
         int h = bar_height - 2 * inset;
 
-        bool highlighted = (i == BAR_TOGGLE_KEYBOARD && ui->panel_mode == PANEL_KEYBOARD) ||
+        bool highlighted = (i == BAR_TOGGLE_KEYBOARD && keyboard_button_active) ||
                            (i == BAR_TOGGLE_MENU && ui->panel_mode == PANEL_MENU);
         bool flashing = ui->flash_source == FLASH_BAR_BUTTON && ui->flash_index == i;
+        /* "Menu" vira "Sair" sem sessão ativa — nunca fica destacado (não é um painel
+         * pra alternar, é ação imediata, mesmo tratamento do scroll). */
+        const char *label =
+            (i == BAR_TOGGLE_MENU && !ui->connected) ? "Sair" : kBarLabels[i];
 
         if (highlighted || flashing) {
             cairo_set_source_rgb(cr, 0, 0, 0);
             cairo_rectangle(cr, x, y, w, h);
             cairo_fill(cr);
             cairo_set_source_rgb(cr, 1, 1, 1);
-            draw_centered_label(cr, x, y, w, h, kBarLabels[i]);
+            draw_centered_label(cr, x, y, w, h, label);
         } else {
             cairo_set_source_rgb(cr, 0, 0, 0);
             cairo_set_line_width(cr, border_w);
             cairo_rectangle(cr, x, y, w, h);
             cairo_stroke(cr);
-            draw_centered_label(cr, x, y, w, h, kBarLabels[i]);
+            draw_centered_label(cr, x, y, w, h, label);
         }
     }
 
     cairo_restore(cr);
+}
+
+/* ---- Tela de conexão (item 5, 27/08 — redesenhada no mesmo dia depois de testar no
+ * device: a primeira versão usava telas cheias com proporções próprias e ficou
+ * "rudimentar" comparado a teclado/menu, feedback do usuário). Agora reaproveita a MESMA
+ * área/geometria da sessão: painel = lista, formulário (mesmo Keyboard do teclado
+ * normal) ou "conectando..."; frame = campos do formulário ou mensagem de conectando;
+ * barra sempre visível, com "Menu" bloqueado ao toque (não faz sentido sem sessão) e
+ * ↑/↓ reaproveitados pra rolar a lista em vez de mandar scroll pro Pi. ---- */
+
+static int connect_list_row_h(const Ui *ui) {
+    return (ui->bar_top - ui->keyboard_top) / CONNECT_LIST_VISIBLE_ROWS;
+}
+
+static void draw_connect_list_panel(cairo_t *cr, const Ui *ui) {
+    cairo_save(cr);
+    cairo_translate(cr, 0, ui->keyboard_top);
+
+    int panel_h = ui->bar_top - ui->keyboard_top;
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_rectangle(cr, 0, 0, ui->screen_width, panel_h);
+    cairo_fill(cr);
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_set_line_width(cr, 2);
+    cairo_move_to(cr, 0, 1);
+    cairo_line_to(cr, ui->screen_width, 1);
+    cairo_stroke(cr);
+
+    cairo_select_font_face(cr, "DejaVu Sans", CAIRO_FONT_SLANT_NORMAL,
+                            CAIRO_FONT_WEIGHT_BOLD);
+
+    int row_h = connect_list_row_h(ui);
+    int inset = proportional_inset(row_h);
+    int border_w = proportional_border_width(row_h);
+    int total_rows = ui->connect_entry_count + 1; /* +1 pra linha "+" */
+
+    for (int slot = 0; slot < CONNECT_LIST_VISIBLE_ROWS; slot++) {
+        int row = slot + ui->connect_scroll_offset;
+        if (row >= total_rows) {
+            break;
+        }
+        int x = inset;
+        int y = slot * row_h + inset;
+        int w = ui->screen_width - 2 * inset;
+        int h = row_h - 2 * inset;
+
+        bool is_plus = (row == ui->connect_entry_count);
+        char label[96];
+        if (is_plus) {
+            snprintf(label, sizeof(label), "+");
+        } else {
+            snprintf(label, sizeof(label), "%s:%d", ui->connect_entries[row].host,
+                     ui->connect_entries[row].port);
+        }
+
+        /* !is_plus: achado de review, 27/08 — sem essa checagem, lista vazia (primeiro
+         * uso, connect_entry_count==0) desenhava a própria linha "+" destacada como se
+         * já estivesse "selecionada" (selected_index nasce 0, e "+" também é a linha 0
+         * quando não há nenhuma conexão salva ainda). */
+        bool selected = !is_plus && row == ui->connect_selected_index;
+        if (selected) {
+            cairo_set_source_rgb(cr, 0, 0, 0);
+            cairo_rectangle(cr, x, y, w, h);
+            cairo_fill(cr);
+            cairo_set_source_rgb(cr, 1, 1, 1);
+            draw_centered_label(cr, x, y, w, h, label);
+        } else {
+            cairo_set_source_rgb(cr, 0, 0, 0);
+            cairo_set_line_width(cr, border_w);
+            cairo_rectangle(cr, x, y, w, h);
+            cairo_stroke(cr);
+            draw_centered_label(cr, x, y, w, h, label);
+        }
+    }
+
+    cairo_restore(cr);
+}
+
+static void draw_connecting_panel(cairo_t *cr, const Ui *ui) {
+    cairo_save(cr);
+    cairo_translate(cr, 0, ui->keyboard_top);
+
+    int panel_h = ui->bar_top - ui->keyboard_top;
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_rectangle(cr, 0, 0, ui->screen_width, panel_h);
+    cairo_fill(cr);
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_set_line_width(cr, 2);
+    cairo_move_to(cr, 0, 1);
+    cairo_line_to(cr, ui->screen_width, 1);
+    cairo_stroke(cr);
+
+    cairo_select_font_face(cr, "DejaVu Sans", CAIRO_FONT_SLANT_NORMAL,
+                            CAIRO_FONT_WEIGHT_BOLD);
+
+    /* Botão "Voltar" com a MESMA altura de linha da lista/teclado (row_h de
+     * CONNECT_LIST_VISIBLE_ROWS), não a altura do painel inteiro — achado de review:
+     * draw_centered_label só escala a fonte pela ALTURA da caixa (sem olhar a largura
+     * do texto), então passar panel_h inteiro deixava o rótulo ~6x maior que qualquer
+     * outro texto do app. Centralizado verticalmente no painel, resto em branco. */
+    int row_h = connect_list_row_h(ui);
+    int inset = proportional_inset(row_h);
+    int x = inset, y = (panel_h - row_h) / 2;
+    int w = ui->screen_width - 2 * inset, h = row_h - 2 * inset;
+    cairo_set_line_width(cr, proportional_border_width(row_h));
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_stroke(cr);
+    draw_centered_label(cr, x, y, w, h, "Voltar");
+
+    cairo_restore(cr);
+}
+
+static int connect_form_row_h(const Ui *ui) {
+    return ui->keyboard_top / CONNECT_FORM_FIELD_ROWS;
+}
+
+/* Campos IP/Porta/Senha + botões Conectar/Cancelar do formulário "+", desenhados na
+ * área do FRAME (mesma área que mostraria a tela do Pi) — o teclado pra digitar fica no
+ * painel logo abaixo, desenhado por draw_keyboard (mesma instância/função da sessão
+ * real). 3 fileiras: IP+Porta, Senha, botões. */
+static void draw_connect_form_fields(cairo_t *cr, const Ui *ui) {
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_rectangle(cr, 0, 0, ui->screen_width, ui->keyboard_top);
+    cairo_fill(cr);
+
+    cairo_select_font_face(cr, "DejaVu Sans", CAIRO_FONT_SLANT_NORMAL,
+                            CAIRO_FONT_WEIGHT_BOLD);
+
+    int row_h = connect_form_row_h(ui);
+    int inset = proportional_inset(row_h);
+    int border_w = proportional_border_width(row_h);
+    int ip_w = ui->screen_width * CONNECT_FORM_IP_WIDTH_PERCENT / 100;
+
+    char ip_label[96];
+    snprintf(ip_label, sizeof(ip_label), "IP: %s", ui->form_host);
+    char port_label[32];
+    snprintf(port_label, sizeof(port_label), "Porta: %s", ui->form_port);
+    /* Senha mascarada com '*' — o texto real nunca aparece na tela (nem precisa: sem
+     * cursor/edição no meio, ver o campo de senha como write-only visualmente). */
+    char password_label[64];
+    {
+        size_t n = strlen(ui->form_password);
+        char stars[CONNECT_PASSWORD_BUF_LEN];
+        memset(stars, '*', n);
+        stars[n] = '\0';
+        snprintf(password_label, sizeof(password_label), "Senha: %s", stars);
+    }
+
+    struct {
+        int x, y, w;
+        const char *label;
+        bool active;
+    } fields[3] = {
+        {0, 0, ip_w, ip_label, ui->form_active == FORM_FIELD_HOST},
+        {ip_w, 0, ui->screen_width - ip_w, port_label, ui->form_active == FORM_FIELD_PORT},
+        {0, row_h, ui->screen_width, password_label,
+         ui->form_active == FORM_FIELD_PASSWORD},
+    };
+    for (int i = 0; i < 3; i++) {
+        int x = fields[i].x + inset;
+        int y = fields[i].y + inset;
+        int w = fields[i].w - 2 * inset;
+        int h = row_h - 2 * inset;
+        if (fields[i].active) {
+            cairo_set_source_rgb(cr, 0, 0, 0);
+            cairo_rectangle(cr, x, y, w, h);
+            cairo_fill(cr);
+            cairo_set_source_rgb(cr, 1, 1, 1);
+            draw_centered_label(cr, x, y, w, h, fields[i].label);
+        } else {
+            cairo_set_source_rgb(cr, 0, 0, 0);
+            cairo_set_line_width(cr, border_w);
+            cairo_rectangle(cr, x, y, w, h);
+            cairo_stroke(cr);
+            draw_centered_label(cr, x, y, w, h, fields[i].label);
+        }
+    }
+
+    int half_w = ui->screen_width / 2;
+    const char *labels[2] = {"Conectar", "Cancelar"};
+    for (int i = 0; i < 2; i++) {
+        int x = i * half_w + inset;
+        int y = 2 * row_h + inset;
+        int w = half_w - 2 * inset;
+        int h = row_h - 2 * inset;
+        cairo_set_source_rgb(cr, 0, 0, 0);
+        cairo_set_line_width(cr, border_w);
+        cairo_rectangle(cr, x, y, w, h);
+        cairo_stroke(cr);
+        draw_centered_label(cr, x, y, w, h, labels[i]);
+    }
+}
+
+static void draw_connecting_message(cairo_t *cr, const Ui *ui) {
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_rectangle(cr, 0, 0, ui->screen_width, ui->keyboard_top);
+    cairo_fill(cr);
+
+    cairo_select_font_face(cr, "DejaVu Sans", CAIRO_FONT_SLANT_NORMAL,
+                            CAIRO_FONT_WEIGHT_BOLD);
+
+    /* Mesma fileira usada pelos campos do formulário "+" (connect_form_row_h), não a
+     * altura do frame inteiro — achado de review: draw_centered_label só escala a
+     * fonte pela ALTURA da caixa, sem olhar a largura do texto, então keyboard_top
+     * inteiro como h deixava a fonte gigante o bastante pra vazar pra fora da tela. */
+    int row_h = connect_form_row_h(ui);
+    char label[128];
+    if (ui->connecting_error[0]) {
+        /* Item 9: depois de N tentativas falhadas (quem conta é o main.c), o
+         * "Conectando..." dá lugar ao aviso — a sessão CONTINUA tentando em segundo
+         * plano; se vingar depois, ui_show_session limpa tudo isso sozinho. */
+        snprintf(label, sizeof(label), "Não foi possível conectar a %s:%d",
+                 ui->connecting_host, ui->connecting_port);
+        draw_centered_label(cr, 0, 0, ui->screen_width, row_h, label);
+        draw_centered_label(cr, 0, row_h, ui->screen_width, row_h, ui->connecting_error);
+    } else {
+        snprintf(label, sizeof(label), "Conectando a %s:%d...", ui->connecting_host,
+                 ui->connecting_port);
+        draw_centered_label(cr, 0, 0, ui->screen_width, row_h, label);
+    }
 }
 
 static gboolean on_expose(GtkWidget *widget, GdkEventExpose *event, gpointer user_data) {
@@ -347,24 +681,49 @@ static gboolean on_expose(GtkWidget *widget, GdkEventExpose *event, gpointer use
 
     cairo_set_source_rgb(cr, 1, 1, 1);
     cairo_paint(cr);
-    if (ui->surface) {
-        cairo_set_source_surface(cr, ui->surface, 0, 0);
-        cairo_paint(cr);
+
+    /* Área do FRAME (0..keyboard_top): pixels do Pi quando conectado; senão, mensagem de
+     * conectando ou campos do formulário "+" — ambos independentes de panel_mode (não
+     * somem se o Teclado for escondido, ver comentário em struct Ui). Fora desses casos
+     * (lista, ou nada em especial), fica em branco mesmo. */
+    if (ui->connected) {
+        if (ui->surface) {
+            cairo_set_source_surface(cr, ui->surface, 0, 0);
+            cairo_paint(cr);
+        }
+    } else if (ui->connecting) {
+        draw_connecting_message(cr, ui);
+    } else if (ui->pre_connect_panel == PANEL_CONNECT_FORM) {
+        draw_connect_form_fields(cr, ui);
     }
+
     if (event->area.y + event->area.height > ui->keyboard_top && event->area.y < ui->bar_top) {
-        if (ui->panel_mode == PANEL_KEYBOARD) {
+        switch (ui->panel_mode) {
+        case PANEL_KEYBOARD:
+        case PANEL_CONNECT_FORM:
             draw_keyboard(cr, ui);
-        } else if (ui->panel_mode == PANEL_MENU) {
+            break;
+        case PANEL_MENU:
             draw_menu(cr, ui);
+            break;
+        case PANEL_CONNECT_LIST:
+            draw_connect_list_panel(cr, ui);
+            break;
+        case PANEL_CONNECTING:
+            draw_connecting_panel(cr, ui);
+            break;
+        case PANEL_NONE:
+            break;
         }
     }
+
     if (event->area.y + event->area.height > ui->bar_top) {
         draw_bar(cr, ui);
     }
 
     cairo_destroy(cr);
 
-    if (ui->surface && event->area.y < ui->keyboard_top) {
+    if (ui->connected && ui->surface && event->area.y < ui->keyboard_top) {
         /* só loga a fila de espera quando o redraw inclui o frame de verdade — expose só
          * do teclado (ou antes de qualquer frame chegar) não tem paint_requested_at
          * válido pra comparar. */
@@ -375,8 +734,8 @@ static gboolean on_expose(GtkWidget *widget, GdkEventExpose *event, gpointer use
     return TRUE;
 }
 
-/* Agenda o redraw só do retângulo de UM alvo de flash (tecla do teclado ou botão da
- * barra — cada fonte tem seu próprio esquema de geometria). */
+/* Agenda o redraw só do retângulo de UM alvo de flash (tecla do teclado — sessão ou
+ * formulário "+", mesma instância/geometria —, botão da barra, ou item do menu). */
 static void queue_flash_redraw(Ui *ui, FlashSource source, int index) {
     if (source == FLASH_KEYBOARD_KEY) {
         KeyboardKeyView key = keyboard_key_view(ui->keyboard, index);
@@ -388,6 +747,16 @@ static void queue_flash_redraw(Ui *ui, FlashSource source, int index) {
         int w = (index == BAR_BUTTON_COUNT - 1) ? ui->screen_width - x : seg_w;
         gtk_widget_queue_draw_area(ui->drawing_area, x, ui->bar_top, w,
                                     ui->screen_height - ui->bar_top);
+    } else if (source == FLASH_MENU_ITEM) {
+        /* mesma conta de geometria de draw_menu/find_menu_item_index — redesenha só a
+         * linha inteira (não só a fração x0..x1 do item) por simplicidade, já que os
+         * pares A-/A+ de uma linha ficam lado a lado e um redraw de linha inteira não
+         * é mais caro que dois redraws de metade de linha. */
+        int panel_h = ui->bar_top - ui->keyboard_top;
+        int row_h = panel_h / MENU_ROWS;
+        int row = kMenuItems[index].row;
+        gtk_widget_queue_draw_area(ui->drawing_area, 0, ui->keyboard_top + row * row_h,
+                                    ui->screen_width, row_h);
     }
 }
 
@@ -428,22 +797,13 @@ static void cancel_flash(Ui *ui) {
     ui->flash_source = FLASH_NONE;
 }
 
-/* Abre/troca/fecha o painel conforme as 3 regras combinadas (27/08): nada aberto -> abre
- * o tocado; o outro aberto -> troca pro tocado; o próprio já aberto -> fecha (volta a
- * PANEL_NONE). Teclado e menu reservam a MESMA altura, então só a transição nada<->algo
- * dispara resize — trocar entre os dois com o painel já aberto é só redesenho local. */
-static void toggle_panel(Ui *ui, BarButton button) {
-    PanelMode wanted = (button == BAR_TOGGLE_KEYBOARD) ? PANEL_KEYBOARD : PANEL_MENU;
+/* Aplica `wanted` a panel_mode e dispara on_resize se abrir/fechar mudou o tamanho útil
+ * do frame — função só (não só o toggle da barra) porque as transições de tela da
+ * conexão (ui_show_connect_list/connecting/session) também precisam desse mesmo ajuste
+ * de área, não só o toque no botão Teclado/Menu. */
+static void apply_panel_mode(Ui *ui, PanelMode wanted) {
     bool was_open = ui->panel_mode != PANEL_NONE;
-
-    ui->panel_mode = (ui->panel_mode == wanted) ? PANEL_NONE : wanted;
-    /* Mesmo raciocínio da troca de página dentro do teclado (achado de review, 27/08):
-     * "Esquerdo" só existe na página de símbolos do teclado — sair do painel de teclado
-     * de qualquer jeito (pro menu, ou fechando) deixaria um arme vivo sem indicador
-     * visual nenhum. Idempotente quando já desarmado, sem custo em trocar
-     * letras<->símbolos->letras sem nunca ter armado nada. */
-    keyboard_consume_left_click_arm(ui->keyboard);
-
+    ui->panel_mode = wanted;
     bool now_open = ui->panel_mode != PANEL_NONE;
     if (was_open != now_open) {
         ui->keyboard_top = now_open ? ui->bar_top * (100 - KEYBOARD_HEIGHT_PERCENT) / 100
@@ -454,6 +814,30 @@ static void toggle_panel(Ui *ui, BarButton button) {
     }
 }
 
+/* Abre/troca/fecha o painel conforme as 3 regras combinadas (27/08): nada aberto -> abre
+ * o tocado; o outro aberto -> troca pro tocado; o próprio já aberto -> fecha (volta a
+ * PANEL_NONE). "Teclado" alterna pro conteúdo certo conforme o estado (teclado de
+ * verdade se conectado; senão, o que a tela de conexão tava mostrando por último — lista,
+ * formulário ou conectando). "Menu" só chega aqui quando HÁ sessão ativa — sem sessão o
+ * mesmo botão vira "Sair" (ver handle_bar_tap), tratado antes de chegar nesta função. */
+static void toggle_panel(Ui *ui, BarButton button) {
+    /* Mesmo raciocínio da troca de página dentro do teclado (achado de review, 27/08):
+     * "Esquerdo" só existe na página de símbolos — sair do painel de teclado de
+     * qualquer jeito deixaria um arme vivo sem indicador visual nenhum. Idempotente
+     * quando já desarmado. */
+    keyboard_consume_left_click_arm(ui->keyboard);
+
+    if (button == BAR_TOGGLE_MENU) {
+        apply_panel_mode(ui, ui->panel_mode == PANEL_MENU ? PANEL_NONE : PANEL_MENU);
+        return;
+    }
+
+    PanelMode target = ui->connected      ? PANEL_KEYBOARD
+                       : ui->connecting   ? PANEL_CONNECTING
+                                          : ui->pre_connect_panel;
+    apply_panel_mode(ui, ui->panel_mode == target ? PANEL_NONE : target);
+}
+
 static void handle_bar_tap(Ui *ui, int x) {
     int seg_w = ui->screen_width / BAR_BUTTON_COUNT;
     int index = x / seg_w;
@@ -462,16 +846,111 @@ static void handle_bar_tap(Ui *ui, int x) {
     }
     BarButton button = (BarButton)index;
 
+    if (button == BAR_TOGGLE_MENU && !ui->connected) {
+        /* "Menu" vira "Sair" sem sessão ativa — zoom/scroll de Pi não fazem sentido
+         * antes de conectar, mas o usuário precisa de algum jeito de sair do app sem
+         * precisar se conectar a algo primeiro (achado do usuário, 27/08: antes disso
+         * o botão só ficava bloqueado, sem alternativa nenhuma de saída na tela de
+         * conexão). Ação imediata, não um painel — mesmo tratamento do scroll. */
+        start_flash(ui, FLASH_BAR_BUTTON, index);
+        ui->on_action(MENU_ACTION_QUIT, ui->callback_user_data);
+        return;
+    }
+
     if (button == BAR_TOGGLE_KEYBOARD || button == BAR_TOGGLE_MENU) {
         toggle_panel(ui, button);
-        /* mudança de painel é grande (pode até mudar tamanho de frame) — redesenha tudo
-         * em vez de calcular a região exata, mais simples e o custo já é aceito
+        /* mudança de painel é grande (pode até mudar tamanho de frame) — redesenha
+         * tudo em vez de calcular a região exata, mais simples e o custo já é aceito
          * (ação deliberada e pouco frequente, não um hot path). */
         cancel_flash(ui);
         gtk_widget_queue_draw(ui->drawing_area);
-    } else {
+        return;
+    }
+
+    if (ui->panel_mode == PANEL_CONNECT_LIST) {
+        /* Sem sessão ativa, ↑/↓ não têm o que rolar no Pi — repropósito pra rolar a
+         * lista de conexões salvas em vez de mandar scroll pro servidor (sugestão do
+         * usuário, 27/08: evita precisar de uma barra de rolagem própria). */
+        int total_rows = ui->connect_entry_count + 1; /* +1 pra linha "+" */
+        int max_offset = total_rows > CONNECT_LIST_VISIBLE_ROWS
+                              ? total_rows - CONNECT_LIST_VISIBLE_ROWS
+                              : 0;
+        if (button == BAR_SCROLL_UP && ui->connect_scroll_offset > 0) {
+            ui->connect_scroll_offset--;
+        } else if (button == BAR_SCROLL_DOWN && ui->connect_scroll_offset < max_offset) {
+            ui->connect_scroll_offset++;
+        }
         start_flash(ui, FLASH_BAR_BUTTON, index);
-        ui->on_bar(button, ui->callback_user_data);
+        gtk_widget_queue_draw_area(ui->drawing_area, 0, ui->keyboard_top, ui->screen_width,
+                                    ui->bar_top - ui->keyboard_top);
+        return;
+    }
+
+    /* Nos demais casos (sessão conectada, ou lista fora de vista): comportamento normal
+     * — session_send_scroll já ignora em silêncio sem conexão ativa (ver session.c), daí
+     * não precisar bloquear explicitamente PANEL_CONNECT_FORM/PANEL_CONNECTING/nenhum. */
+    start_flash(ui, FLASH_BAR_BUTTON, index);
+    ui->on_bar(button, ui->callback_user_data);
+}
+
+static void handle_connect_list_panel_tap(Ui *ui, int x, int panel_y) {
+    (void)x;
+    int row_h = connect_list_row_h(ui);
+    int row = panel_y / row_h + ui->connect_scroll_offset;
+    int total_rows = ui->connect_entry_count + 1;
+    if (row >= total_rows) {
+        return; /* abaixo da última linha visível (sobra da divisão) — sem alvo */
+    }
+
+    if (row == ui->connect_entry_count) {
+        /* linha "+": entra no formulário do zero — porta pré-preenchida com o default
+         * mais comum (poupa digitação no caso comum), host/senha vazios */
+        ui->form_host[0] = '\0';
+        snprintf(ui->form_port, sizeof(ui->form_port), "5901");
+        ui->form_password[0] = '\0';
+        ui->form_active = FORM_FIELD_HOST;
+        ui->pre_connect_panel = PANEL_CONNECT_FORM;
+        apply_panel_mode(ui, PANEL_CONNECT_FORM);
+        gtk_widget_queue_draw(ui->drawing_area);
+        return;
+    }
+
+    ui->on_connect_request(ui->connect_entries[row].host, ui->connect_entries[row].port,
+                           ui->connect_entries[row].password, ui->callback_user_data);
+}
+
+/* Backspace (0xFF08, ver keyboard.h) apaga o último char; ASCII imprimível (0x21-0x7E)
+ * é anexado; espaço (0x20) e o resto (setas, Tab, Enter, o keysym-fantasma de um chord
+ * Ctrl) são ignorados em silêncio — espaço porque nenhum dos três campos aceita
+ * (IP/porta por natureza; senha porque o formato do connection_store é separado por
+ * espaço, ver connection_store.h), o resto porque não faz sentido num campo de texto
+ * local. */
+static void append_or_backspace(char *buf, size_t buf_len, uint32_t keysym) {
+    size_t len = strlen(buf);
+    if (keysym == 0xFF08) {
+        if (len > 0) {
+            buf[len - 1] = '\0';
+        }
+    } else if (keysym > 0x20 && keysym <= 0x7E && len + 1 < buf_len) {
+        buf[len] = (char)keysym;
+        buf[len + 1] = '\0';
+    }
+}
+
+/* Buffer + tamanho do campo ativo do formulário — par de helpers pro roteamento de
+ * digitação em handle_panel_tap. */
+static char *form_active_buf(Ui *ui, size_t *out_len) {
+    switch (ui->form_active) {
+    case FORM_FIELD_PORT:
+        *out_len = sizeof(ui->form_port);
+        return ui->form_port;
+    case FORM_FIELD_PASSWORD:
+        *out_len = sizeof(ui->form_password);
+        return ui->form_password;
+    case FORM_FIELD_HOST:
+    default:
+        *out_len = sizeof(ui->form_host);
+        return ui->form_host;
     }
 }
 
@@ -479,27 +958,58 @@ static void handle_panel_tap(Ui *ui, int x, int y) {
     int panel_y = y - ui->keyboard_top;
 
     if (ui->panel_mode == PANEL_MENU) {
-        const MenuItem *item = find_menu_item(ui, x, panel_y);
-        if (item) {
-            ui->on_action(item->action, ui->callback_user_data);
+        int index = find_menu_item_index(ui, x, panel_y);
+        if (index >= 0) {
+            start_flash(ui, FLASH_MENU_ITEM, index);
+            ui->on_action(kMenuItems[index].action, ui->callback_user_data);
         }
-        return; /* menu não tem flash — cada toque já dispara a ação, sem estado local */
+        return;
+    }
+    if (ui->panel_mode == PANEL_CONNECT_LIST) {
+        handle_connect_list_panel_tap(ui, x, panel_y);
+        return;
+    }
+    if (ui->panel_mode == PANEL_CONNECTING) {
+        /* linha única "Voltar" ocupando o painel inteiro — mesma convenção de
+         * find_menu_item, que também não desconta o inset da área tocável */
+        ui->on_back(ui->callback_user_data);
+        return;
     }
 
+    /* PANEL_KEYBOARD (sessão real) ou PANEL_CONNECT_FORM (formulário "+") — MESMA
+     * instância de Keyboard nos dois casos; só o destino dos eventos muda. */
     int tapped = keyboard_key_index_at(ui->keyboard, x, panel_y);
-
     KeyboardEvent events[KEYBOARD_MAX_EVENTS];
     bool right_click = false;
     bool visual_changed = false;
     int n = keyboard_handle_tap(ui->keyboard, x, panel_y, events, &right_click,
                                 &visual_changed);
-    for (int i = 0; i < n; i++) {
-        ui->on_key(events[i].keysym, events[i].down, ui->callback_user_data);
+
+    if (ui->panel_mode == PANEL_CONNECT_FORM) {
+        size_t active_len;
+        char *active = form_active_buf(ui, &active_len);
+        for (int i = 0; i < n; i++) {
+            if (events[i].down) {
+                append_or_backspace(active, active_len, events[i].keysym);
+            }
+        }
+        if (n > 0) {
+            /* texto pode ter mudado — redesenha só as 2 fileiras de campos (IP+Porta e
+             * Senha), na área do frame (mais barato no e-ink que redesenhar tudo) */
+            gtk_widget_queue_draw_area(ui->drawing_area, 0, 0, ui->screen_width,
+                                        2 * connect_form_row_h(ui));
+        }
+        /* right_click (tecla "Direito") não faz sentido aqui — inerte de propósito */
+    } else {
+        for (int i = 0; i < n; i++) {
+            ui->on_key(events[i].keysym, events[i].down, ui->callback_user_data);
+        }
+        if (right_click) {
+            /* ação imediata (tecla "Direito") — não sticky, não muda desenho do teclado */
+            ui->on_right_click(ui->callback_user_data);
+        }
     }
-    if (right_click) {
-        /* ação imediata (tecla "Direito") — não sticky, não muda desenho do teclado */
-        ui->on_right_click(ui->callback_user_data);
-    }
+
     if (visual_changed) {
         /* sticky/página: o redraw da faixa inteira já é o feedback — sem flash (e o
          * flash pendente de antes morre junto, o estado da página pode ter mudado) */
@@ -532,6 +1042,47 @@ static void start_drag(Ui *ui, int x, int y) {
     ui->on_drag(x, y, true, ui->callback_user_data);
 }
 
+/* Toque na área do FRAME do formulário "+" (fileira IP+Porta, fileira Senha, fileira
+ * Conectar/Cancelar — ver draw_connect_form_fields) — só chamado quando
+ * pre_connect_panel==PANEL_CONNECT_FORM (independente do painel/teclado estar visível
+ * ou não, ver on_button_press). */
+static void handle_connect_form_frame_tap(Ui *ui, int x, int y) {
+    int row_h = connect_form_row_h(ui);
+    int ip_w = ui->screen_width * CONNECT_FORM_IP_WIDTH_PERCENT / 100;
+
+    if (y < 2 * row_h) {
+        /* fileiras de campos: só troca qual campo recebe o próximo toque de tecla, sem
+         * mexer no texto já digitado em nenhum deles */
+        if (y < row_h) {
+            ui->form_active = (x < ip_w) ? FORM_FIELD_HOST : FORM_FIELD_PORT;
+        } else {
+            ui->form_active = FORM_FIELD_PASSWORD;
+        }
+        gtk_widget_queue_draw_area(ui->drawing_area, 0, 0, ui->screen_width, 2 * row_h);
+        return;
+    }
+    if (y < 3 * row_h) {
+        /* fileira dos botões: Conectar (esquerda) / Cancelar (direita) */
+        if (x < ui->screen_width / 2) {
+            if (ui->form_host[0] == '\0') {
+                return; /* IP vazio: ignora o toque, nada de válido pra conectar ainda */
+            }
+            int port = atoi(ui->form_port);
+            if (port <= 0 || port > 65535) {
+                return; /* porta inválida: mesmo raciocínio, ignora em silêncio */
+            }
+            ui->on_connect_request(ui->form_host, port, ui->form_password,
+                                   ui->callback_user_data);
+        } else {
+            ui->pre_connect_panel = PANEL_CONNECT_LIST;
+            apply_panel_mode(ui, PANEL_CONNECT_LIST);
+            gtk_widget_queue_draw(ui->drawing_area);
+        }
+        return;
+    }
+    /* abaixo dos botões: resto do frame, deliberadamente em branco — sem alvo */
+}
+
 static gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data) {
     (void)widget;
     Ui *ui = user_data;
@@ -541,7 +1092,17 @@ static gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpoint
     if (y >= ui->bar_top) {
         handle_bar_tap(ui, x);
     } else if (y < ui->keyboard_top) {
-        if (keyboard_left_click_armed(ui->keyboard)) {
+        if (!ui->connected) {
+            /* Mesma prioridade de on_expose/toggle_panel: connecting vence
+             * pre_connect_panel — achado de review, 27/08: sem o `!ui->connecting`
+             * aqui, um toque no frame durante "Conectando..." caía no handler do
+             * formulário (mesma geometria), podendo reiniciar a tentativa ou trocar de
+             * painel sem derrubar a conexão pendente. */
+            if (!ui->connecting && ui->pre_connect_panel == PANEL_CONNECT_FORM) {
+                handle_connect_form_frame_tap(ui, x, y);
+            }
+            /* lista ou conectando: frame em branco, nada tocável ali */
+        } else if (keyboard_left_click_armed(ui->keyboard)) {
             start_drag(ui, x, y);
         } else {
             ui->on_click(x, y, ui->callback_user_data);
@@ -601,7 +1162,8 @@ static gboolean on_button_release(GtkWidget *widget, GdkEventButton *event, gpoi
 
 Ui *ui_create(const char *window_title, UiClickFn on_click, UiKeyFn on_key,
               UiActionFn on_action, UiBarFn on_bar, UiResizeFn on_resize, UiDragFn on_drag,
-              UiRightClickFn on_right_click, void *user_data) {
+              UiRightClickFn on_right_click, UiConnectRequestFn on_connect_request,
+              UiBackFn on_back, void *user_data) {
     Ui *ui = g_new0(Ui, 1);
     ui->on_click = on_click;
     ui->on_key = on_key;
@@ -610,11 +1172,17 @@ Ui *ui_create(const char *window_title, UiClickFn on_click, UiKeyFn on_key,
     ui->on_resize = on_resize;
     ui->on_drag = on_drag;
     ui->on_right_click = on_right_click;
+    ui->on_connect_request = on_connect_request;
+    ui->on_back = on_back;
     ui->callback_user_data = user_data;
-    /* flash_source e dragging nascem FLASH_NONE/false (== 0) via g_new0; panel_mode
-     * nasce PANEL_KEYBOARD explicitamente abaixo — estado inicial igual ao
-     * comportamento de antes da barra existir (teclado sempre visível). */
-    ui->panel_mode = PANEL_KEYBOARD;
+    /* flash_source, dragging, connected e connecting nascem FLASH_NONE/false (== 0) via
+     * g_new0. panel_mode e pre_connect_panel nascem PANEL_CONNECT_LIST explicitamente
+     * abaixo — o app começa sem sessão nenhuma (ver docs/ideias-futuras.md item 5);
+     * main.c chama ui_show_connect_list logo em seguida com a lista de verdade, isso
+     * aqui só evita desenhar lixo no primeiro expose que o GTK dispara ao mapear a
+     * janela. */
+    ui->panel_mode = PANEL_CONNECT_LIST;
+    ui->pre_connect_panel = PANEL_CONNECT_LIST;
     /* Resolução real detectada em runtime, não hardcoded — o mesmo binário serve qualquer
      * modelo de Kindle que conectar. */
     ui->screen_width = gdk_screen_width();
@@ -694,6 +1262,67 @@ void ui_show_frame(Ui *ui, int width, int height, const uint32_t *argb32_pixels)
      * (enquanto o servidor ainda manda o tamanho antigo, maior que a área útil, o clip do
      * expose limita o desenho de qualquer jeito). */
     gtk_widget_queue_draw_area(ui->drawing_area, 0, 0, ui->screen_width, ui->keyboard_top);
+}
+
+void ui_show_connect_list(Ui *ui, const UiConnectionEntry *entries, int count,
+                          int selected_index) {
+    if (count > UI_CONNECT_ENTRIES_MAX) {
+        count = UI_CONNECT_ENTRIES_MAX; /* mesmo teto de connection_store.h — não deveria
+                                          * acontecer, mas não vale travar por isso */
+    }
+    ui->connect_entry_count = count;
+    for (int i = 0; i < count; i++) {
+        snprintf(ui->connect_entries[i].host, sizeof(ui->connect_entries[i].host), "%s",
+                 entries[i].host);
+        ui->connect_entries[i].port = entries[i].port;
+        snprintf(ui->connect_entries[i].password, sizeof(ui->connect_entries[i].password),
+                 "%s", entries[i].password ? entries[i].password : "");
+    }
+    ui->connect_selected_index = selected_index;
+    ui->connect_scroll_offset = 0;
+    ui->connected = false;
+    ui->connecting = false;
+    ui->pre_connect_panel = PANEL_CONNECT_LIST;
+    apply_panel_mode(ui, PANEL_CONNECT_LIST);
+    cancel_flash(ui);
+    gtk_widget_queue_draw(ui->drawing_area);
+}
+
+void ui_show_connecting(Ui *ui, const char *host, int port) {
+    snprintf(ui->connecting_host, sizeof(ui->connecting_host), "%s", host);
+    ui->connecting_port = port;
+    ui->connecting_error[0] = '\0'; /* conexão nova começa sem erro nenhum na tela */
+    ui->connected = false;
+    ui->connecting = true;
+    apply_panel_mode(ui, PANEL_CONNECTING);
+    cancel_flash(ui);
+    gtk_widget_queue_draw(ui->drawing_area);
+}
+
+void ui_show_connect_error(Ui *ui, const char *detail) {
+    if (!ui->connecting) {
+        return; /* só faz sentido com a tela de conectando ativa (ver contrato no .h) */
+    }
+    snprintf(ui->connecting_error, sizeof(ui->connecting_error), "%s",
+             detail ? detail : "verifique o IP, a porta e a senha");
+    /* só a área do frame muda (as 2 fileiras da mensagem) — painel/barra ficam como
+     * estão */
+    gtk_widget_queue_draw_area(ui->drawing_area, 0, 0, ui->screen_width, ui->keyboard_top);
+}
+
+void ui_show_session(Ui *ui) {
+    ui->connected = true;
+    ui->connecting = false;
+    ui->connecting_error[0] = '\0';
+    /* Limpa qualquer arme residual do clique-esquerdo que possa ter sobrado de um toque
+     * na página de símbolos durante o formulário "+" — a mesma instância de Keyboard é
+     * reaproveitada entre a tela de conexão e a sessão real; sem isso, um arme
+     * esquecido ali vazaria pro primeiro arrasto de verdade (mesma classe de bug do
+     * achado de review de 27/08 pro caso letras<->símbolos/teclado<->menu). */
+    keyboard_consume_left_click_arm(ui->keyboard);
+    apply_panel_mode(ui, PANEL_KEYBOARD);
+    cancel_flash(ui);
+    gtk_widget_queue_draw(ui->drawing_area);
 }
 
 void ui_destroy(Ui *ui) {
