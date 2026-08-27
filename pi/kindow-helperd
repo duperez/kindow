@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""kindow-helperd — canal de comando do Kindow no Pi.
+
+O cliente no Kindle não tem como mudar configuração da sessão X do Pi por dentro do
+protocolo VNC (RFB só transporta tela/teclado/ponteiro). Este daemon minúsculo é o canal
+lateral: escuta TCP na porta 5910 e aceita comandos de uma linha.
+
+Três controles de zoom INDEPENDENTES (decisão de 26/08 — cada camada visual tem dono e
+botões próprios no menu do Kindle, sem uma derivar da outra):
+
+    dpi <n>    -> conteúdo dos apps: grava Xft/DPI no xsettingsd.conf e manda SIGHUP pro
+                  xsettingsd, que reaplica ao vivo — apps GTK re-escalam sem reiniciar.
+    deco <n>   -> decoração de janela (titlebar/botões de fechar-minimizar): fonte do
+                  título do Openbox em pontos, via rc.xml + `openbox --reconfigure`
+                  (ao vivo, sem derrubar janelas). O menu do próprio Openbox acompanha
+                  proporcionalmente.
+    panel <n>  -> painel: fonte da taskbar/relógio do tint2 em pontos, via tint2rc +
+                  reinício do tint2 (stateless; a barra pisca uma vez).
+    get        -> "ok <dpi> <deco> <panel>" com os valores atuais — lidos dos próprios
+                  arquivos de config (nenhum estado extra), pro cliente ancorar os
+                  botões A+/A- no valor real, persistido entre sessões.
+    ping       -> "ok pong" (teste de vida barato).
+
+Resposta sempre em uma linha: "ok ..." ou "err ...". Uma conexão por comando.
+
+Pra independência valer, o Xft.dpi do xrdb fica CONGELADO no valor base do xstartup
+(192) — ele era o elo que re-acoplava tint2/Openbox ao DPI dos apps. Efeito colateral
+assumido: apps que só leem xrdb no arranque (Qt fora do Plasma, Java) ficam na base,
+ignorando o zoom de apps — nenhum app da GUI atual é dessa categoria.
+
+Segurança: pensado pra LAN doméstica da PoC (mesma premissa do VNC sem senha já usado no
+projeto — ver rfb-protocol.md). Não expor este Pi em rede hostil sem revisitar isso.
+
+Este daemon é dono dos valores que administra (o xsettingsd.conf inteiro, os <size> de
+título/menu no rc.xml do Openbox, os `*_font` do tint2rc) — edição manual desses campos
+não sobrevive ao próximo comando correspondente.
+"""
+
+import os
+import re
+import socketserver
+import subprocess
+
+PORT = 5910
+DISPLAY = ":1"  # o display da sessão VNC (vnc-kindle.service, display :1)
+
+XSETTINGSD_CONF = os.path.expanduser("~/.config/xsettingsd/xsettingsd.conf")
+OPENBOX_RC = os.path.expanduser("~/.config/openbox/rc.xml")
+TINT2RC = os.path.expanduser("~/.config/tint2/tint2rc")
+
+# Faixas aceitas e defaults (os defaults casam com o que pi/install.sh instala).
+CONTROLS = {
+    "dpi": {"min": 96, "max": 384, "default": 192},
+    "deco": {"min": 8, "max": 40, "default": 14},
+    "panel": {"min": 7, "max": 32, "default": 11},
+}
+
+# proporção fonte-de-menu / fonte-de-título do Openbox (12pt/14pt na base do install.sh)
+DECO_MENU_RATIO = 12.0 / 14.0
+
+
+def read_dpi():
+    try:
+        with open(XSETTINGSD_CONF) as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) == 2 and parts[0] == "Xft/DPI":
+                    # xsettingsd guarda em 1/1024 (formato do protocolo XSETTINGS)
+                    return int(parts[1]) // 1024
+    except (OSError, ValueError):
+        pass
+    return CONTROLS["dpi"]["default"]
+
+
+def apply_dpi(dpi):
+    os.makedirs(os.path.dirname(XSETTINGSD_CONF), exist_ok=True)
+    with open(XSETTINGSD_CONF, "w") as f:
+        f.write("Xft/DPI %d\n" % (dpi * 1024))
+    # -x: só o processo chamado exatamente "xsettingsd" (sem risco de self-match)
+    subprocess.run(["pkill", "-HUP", "-x", "xsettingsd"], check=False)
+
+
+def read_deco():
+    try:
+        with open(OPENBOX_RC) as f:
+            xml = f.read()
+        match = re.search(
+            r'<font place="ActiveWindow">.*?<size>(\d+)</size>', xml, flags=re.S)
+        if match:
+            return int(match.group(1))
+    except (OSError, ValueError):
+        pass
+    return CONTROLS["deco"]["default"]
+
+
+def apply_deco(window_pt):
+    """Openbox não escuta XSETTINGS (confirmado no hardware: os botões do titlebar
+    ficavam paradão no zoom) — reescreve as fontes no rc.xml e recarrega ao vivo."""
+    try:
+        with open(OPENBOX_RC) as f:
+            xml = f.read()
+    except OSError:
+        return  # sem rc.xml não há decoração customizada pra escalar
+    menu_pt = max(6, round(window_pt * DECO_MENU_RATIO))
+
+    def replace(match):
+        place = match.group(2)
+        size = window_pt if place in ("ActiveWindow", "InactiveWindow") else menu_pt
+        return match.group(1) + str(size) + match.group(4)
+
+    new_xml = re.sub(
+        r'(<font place="(ActiveWindow|InactiveWindow|MenuHeader|MenuItem)">'
+        r'.*?<size>)(\d+)(</size>)',
+        replace, xml, flags=re.S)
+    if new_xml != xml:
+        with open(OPENBOX_RC, "w") as f:
+            f.write(new_xml)
+    env = dict(os.environ, DISPLAY=DISPLAY)
+    subprocess.run(["openbox", "--reconfigure"], env=env, check=False)
+
+
+def read_panel():
+    try:
+        with open(TINT2RC) as f:
+            for line in f:
+                match = re.match(r"task_font\s*=\s*\S+\s+(\d+)", line)
+                if match:
+                    return int(match.group(1))
+    except (OSError, ValueError):
+        pass
+    return CONTROLS["panel"]["default"]
+
+
+# O tint2 que ESTE processo criou no zoom anterior — precisa de wait() depois do pkill,
+# senão vira zumbi pendurado no helperd (visto no hardware: um Z por zoom). O tint2
+# ORIGINAL do xstartup não é filho nosso: como o xstartup termina em `exec openbox`, os
+# processos lançados com `&` ficam pendurados no próprio openbox — que colhe filhos
+# herdados via o reaper de SIGCHLD dele (verificado no hardware: zero defunct depois do
+# primeiro `panel` de uma sessão; a suposição anterior de que o init colheria estava
+# errada na explicação, mas o resultado — ninguém vira zumbi — está confirmado). Zoom é
+# ação humana (um toque por vez), então a corrida teórica entre threads do servidor
+# sobre esta variável é aceitável.
+_tint2_spawned = None
+
+
+def apply_panel(font_pt):
+    """tint2 também não escuta XSETTINGS nem tem reload — reescreve as fontes no tint2rc
+    e reinicia (a barra pisca uma vez e volta no tamanho novo). A ALTURA da barra e os
+    ícones dos launchers são config fixa em pixels e não escalam aqui."""
+    global _tint2_spawned
+    try:
+        with open(TINT2RC) as f:
+            conf = f.read()
+    except OSError:
+        return
+    new_conf = re.sub(r"(?m)^((?:task|clock)_font\s*=\s*\S+\s+)\d+",
+                      lambda m: m.group(1) + str(font_pt), conf)
+    if new_conf != conf:
+        with open(TINT2RC, "w") as f:
+            f.write(new_conf)
+    subprocess.run(["pkill", "-x", "tint2"], check=False)
+    if _tint2_spawned is not None:
+        try:
+            _tint2_spawned.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            pass
+    env = dict(os.environ, DISPLAY=DISPLAY)
+    _tint2_spawned = subprocess.Popen(["tint2"], env=env,
+                                      stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL,
+                                      start_new_session=True)
+
+
+APPLY = {"dpi": apply_dpi, "deco": apply_deco, "panel": apply_panel}
+
+
+class Handler(socketserver.StreamRequestHandler):
+    def handle(self):
+        line = self.rfile.readline(128).decode("ascii", "replace").strip()
+        parts = line.split()
+        if parts == ["ping"]:
+            self.wfile.write(b"ok pong\n")
+            return
+        if parts == ["get"]:
+            self.wfile.write(
+                ("ok %d %d %d\n" % (read_dpi(), read_deco(), read_panel()))
+                .encode("ascii"))
+            return
+        if len(parts) == 2 and parts[0] in CONTROLS and parts[1].isdigit():
+            control = CONTROLS[parts[0]]
+            value = int(parts[1])
+            if control["min"] <= value <= control["max"]:
+                APPLY[parts[0]](value)
+                self.wfile.write(("ok %d\n" % value).encode("ascii"))
+                return
+            self.wfile.write(
+                ("err %s fora da faixa %d-%d\n"
+                 % (parts[0], control["min"], control["max"])).encode("ascii"))
+            return
+        self.wfile.write(b"err comando invalido\n")
+
+
+class Server(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+
+
+if __name__ == "__main__":
+    with Server(("0.0.0.0", PORT), Handler) as server:
+        server.serve_forever()

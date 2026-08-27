@@ -132,13 +132,45 @@ As três frentes de pesquisa terminaram, cada uma com decisões concretas regist
    ←↑↓→ renderizam ok. De carona, o teste no hardware revelou e resolveu uma travadinha real do
    Enter — ver a revisão de encoding em [`rfb-protocol.md`](docs/findings/rfb-protocol.md).
 
+7. ~~Menu do app (páginas/ações locais) + zoom remoto em 3 camadas~~ — **feito, testado no
+   hardware real**: uma terceira página do teclado virtual, aberta pelo chord Ctrl+Shift+tecla-de-página
+   (o rótulo vira "Menu" destacado quando o chord arma — funciona a partir das páginas de
+   letras e de símbolos). Ações: voltar ao teclado, três pares de zoom (A-/A+), status da
+   conexão (log) e sair do Kindow — a primeira forma de sair sem SSH. Um novo tipo de tecla,
+   `KEY_ACTION`, emite uma `KeyboardAction` local via um callback próprio (`ui`→`main`) que
+   nunca chega a ir pro servidor VNC. **Zoom remoto em três camadas INDEPENDENTES** (evolução
+   de um controle único, separado a pedido do usuário durante a sessão): Apps (Xft/DPI via
+   `xsettingsd`, ao vivo pra qualquer app GTK), Janela (fonte do titlebar do Openbox em
+   pontos, `rc.xml` + `openbox --reconfigure` ao vivo) e Painel (fontes do `tint2rc` +
+   reinício do `tint2`). Servidor: [`pi/kindow-helperd`](pi/kindow-helperd), protocolo TCP na
+   porta 5910 (`dpi`/`deco`/`panel N`, `get` devolve os três, `ping`). Cliente:
+   [`remote_control.c`/`.h`](app/src/remote_control.c) + `ZoomSpec`/`handle_zoom` em
+   `main.c`. Decisão-chave: o `xrdb` da sessão fica **congelado em 192** — era o elo que
+   re-acoplava as três camadas entre si. Arquitetura núcleo-vs-shims documentada no próprio
+   `kindow-helperd`: XSETTINGS é o núcleo genérico, Openbox/tint2 são shims por componente.
+   De quebra, um achado real de hardware: **`l3afpad` trocado por `mousepad`** no `xstartup`
+   — o `l3afpad` pina a fonte da área de edição (ignora Xft/DPI), diagnosticado com
+   screenshots comparativos no Pi; o `mousepad` usa a fonte monoespaçada do sistema e reescala
+   ao vivo junto com o zoom de Apps. Também entregue: **flash de tecla** — feedback de toque
+   no teclado virtual (tecla normal/ação pisca invertida por ~180ms, sticky/página não
+   piscam porque o feedback delas já é o próprio estado), validado no hardware. Teste
+   unitário `test_keyboard.c` cresceu de 9 pra 15 casos. Detalhes das três técnicas de
+   investigação (diagnóstico por screenshot, medição de `SO_SNDTIMEO`/`connect()`,
+   generalização do self-match de `pgrep`/`pkill`) em
+   [`kindle-hardware-test.md`](docs/findings/kindle-hardware-test.md); revisão da composição
+   da sessão do Pi em [`pi-vnc-server.md`](docs/findings/pi-vnc-server.md). O item 5 da fila
+   (menu do app) ficou **parcialmente** feito — ver `docs/ideias-futuras.md`: ainda faltam
+   desconectar/conectar em outro IP com persistência e o toggle do teclado por gesto.
+
 ## Ideias futuras (não implementadas)
 
 A fila priorizada da **parte 2 da PoC** (definida em 26/08, ao fechar a parte 1) vive em
-[`docs/ideias-futuras.md`](docs/ideias-futuras.md): GUI com editor de texto, scroll, botão
-direito, menu do app, orientação paisagem — mais as duas exploratórias já anotadas antes
-(espelhar a sessão física do Pi e usar o Kindle como segundo monitor de verdade). O item 1
-(teclado virtual) já saiu da fila — ver "Próximos passos" acima.
+[`docs/ideias-futuras.md`](docs/ideias-futuras.md): scroll, botão direito, o restante do
+menu do app (desconectar/conectar em outro IP, toggle do teclado por gesto), orientação
+paisagem — mais as duas exploratórias já anotadas antes (espelhar a sessão física do Pi e
+usar o Kindle como segundo monitor de verdade). Os itens 1 (teclado virtual) e 2 (GUI com
+editor de texto) já saíram da fila, e o item 5 (menu do app) ficou parcialmente feito — ver
+"Próximos passos" acima.
 
 ## Estrutura do repositório
 
@@ -154,8 +186,30 @@ direito, menu do app, orientação paisagem — mais as duas exploratórias já 
   título mágico de janela do Awesome WM); `src/vnc_client.c`/`.h` é o único módulo que fala com
   `libvncclient`; `src/keyboard.c`/`.h` é o módulo puro do teclado virtual (layout, hit-test,
   sticky Shift/Ctrl — zero GTK, zero VNC, com `app/tests/test_keyboard.c`);
+  `src/remote_control.c`/`.h` é o cliente TCP do `kindow-helperd` (`pi/kindow-helperd`) — o
+  canal lateral de comando pro zoom remoto, que o protocolo RFB não cobre; chamado só do
+  wiring (`main.c`), em resposta às ações da página de menu do teclado, sem GTK/VNC também;
   `src/pixel_convert.c` é o módulo puro de conversão de pixel, testável; `src/timing.h` tem os
   helpers de instrumentação de latência.
+- `pi/` — o lado servidor, versionado (antes esses arquivos só existiam como estado aplicado
+  à mão no device, com registro em `docs/findings/` — dívida quitada em 26/08): `xstartup`
+  (sessão: `xsettingsd` + Openbox + tint2 + mousepad, `Xft.dpi` 2x pros ~300dpi do Kindle),
+  `tint2rc` (painel claro de alto contraste), `vnc-kindle.service`, `kindow-helperd` (+
+  `.service`) — o canal de comando TCP que permite ao Kindle mudar o zoom (`Xft/DPI` via
+  `xsettingsd`) ao vivo — e o instalador idempotente `install.sh`.
 - `cmake/` — toolchain file de CMake pro cross-compile do `libvncclient`.
 - `vendor/libvncserver` — submódulo git do `libvncclient` (LibVNC/libvncserver), pinado numa
   release estável.
+
+## Instalando o lado Pi
+
+Com um Raspberry Pi (usuário `pi`) acessível por SSH:
+
+```bash
+scp -r pi/ pi@<ip-do-pi>:/tmp/kindow-pi && ssh -t pi@<ip-do-pi> 'bash /tmp/kindow-pi/install.sh'
+```
+
+O `install.sh` é idempotente (re-rodar é seguro): instala os pacotes, aplica as configs da
+sessão (sem sobrescrever personalizações como o zoom escolhido ou um `rc.xml` editado),
+instala e habilita os dois serviços (`vnc-kindle`, `kindow-helperd`) e verifica no final que
+ambos respondem. O `sudo` pede a senha no próprio terminal do usuário.

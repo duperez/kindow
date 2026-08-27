@@ -6,6 +6,11 @@
 #include "keyboard.h"
 #include "timing.h"
 
+/* Quanto tempo a tecla tocada fica invertida (pedido do usuário: tecla normal "pisca"
+ * preto, mesmo visual das sticky armadas, só que momentâneo). No e-ink o próprio refresh
+ * já come boa parte disso — o valor é o teto lógico, não a duração percebida exata. */
+#define KEY_FLASH_MS 180
+
 /* Fração da altura da tela reservada pro teclado (faixa fixa embaixo — decisão de 26/08:
  * melhor pro e-ink que um overlay que aparece/some, porque a região nunca muda depois de
  * pintada; a variante overlay/gesto ficou como ideia futura configurável via menu, ver
@@ -24,7 +29,14 @@ struct Ui {
     Keyboard *keyboard;
     UiClickFn on_click;
     UiKeyFn on_key;
+    UiActionFn on_action;
     void *callback_user_data;
+    /* Feedback de toque: índice da tecla "piscando" (invertida por um instante) na
+     * página atual, -1 = nenhuma. flash_timer_id é a source que vai apagar o flash —
+     * guardada pra um toque rápido em outra tecla cancelar o apagamento antigo (senão o
+     * timer da tecla anterior apagaria o flash da nova cedo demais). */
+    int flash_index;
+    guint flash_timer_id;
     /* timestamp de quando o último gtk_widget_queue_draw foi pedido — usado só pra medir
      * quanto tempo até o expose de verdade rodar (ver on_expose). Zerado no início; a
      * primeira chamada de on_expose (antes de qualquer frame chegar) ignora essa medição. */
@@ -70,6 +82,9 @@ static void draw_keyboard(cairo_t *cr, const Ui *ui) {
     int count = keyboard_key_count(ui->keyboard);
     for (int i = 0; i < count; i++) {
         KeyboardKeyView key = keyboard_key_view(ui->keyboard, i);
+        if (i == ui->flash_index) {
+            key.highlighted = true; /* feedback de toque: pisca invertida */
+        }
         /* inset de 3px entre teclas vizinhas, sem depender de gap no layout */
         key.x += 3;
         key.y += 3;
@@ -128,6 +143,36 @@ static gboolean on_expose(GtkWidget *widget, GdkEventExpose *event, gpointer use
     return TRUE;
 }
 
+/* Agenda o redraw só do retângulo de uma tecla (coordenadas do teclado -> da janela). */
+static void queue_key_redraw(Ui *ui, int index) {
+    KeyboardKeyView key = keyboard_key_view(ui->keyboard, index);
+    gtk_widget_queue_draw_area(ui->drawing_area, key.x, ui->keyboard_top + key.y, key.w,
+                                key.h);
+}
+
+static gboolean on_flash_timeout(gpointer user_data) {
+    Ui *ui = user_data;
+    ui->flash_timer_id = 0;
+    if (ui->flash_index >= 0) {
+        int index = ui->flash_index;
+        ui->flash_index = -1;
+        queue_key_redraw(ui, index);
+    }
+    return FALSE;
+}
+
+static void start_key_flash(Ui *ui, int index) {
+    if (ui->flash_timer_id) {
+        g_source_remove(ui->flash_timer_id);
+    }
+    if (ui->flash_index >= 0 && ui->flash_index != index) {
+        queue_key_redraw(ui, ui->flash_index); /* apaga o flash anterior já */
+    }
+    ui->flash_index = index;
+    queue_key_redraw(ui, index);
+    ui->flash_timer_id = g_timeout_add(KEY_FLASH_MS, on_flash_timeout, ui);
+}
+
 static gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpointer user_data) {
     (void)widget;
     Ui *ui = user_data;
@@ -139,24 +184,44 @@ static gboolean on_button_press(GtkWidget *widget, GdkEventButton *event, gpoint
         return TRUE;
     }
 
+    int kb_y = y - ui->keyboard_top;
+    int tapped = keyboard_key_index_at(ui->keyboard, x, kb_y);
+
     KeyboardEvent events[KEYBOARD_MAX_EVENTS];
+    KeyboardAction action = KEYBOARD_ACTION_NONE;
     bool visual_changed = false;
-    int n = keyboard_handle_tap(ui->keyboard, x, y - ui->keyboard_top, events, &visual_changed);
+    int n = keyboard_handle_tap(ui->keyboard, x, kb_y, events, &action, &visual_changed);
     for (int i = 0; i < n; i++) {
         ui->on_key(events[i].keysym, events[i].down, ui->callback_user_data);
     }
+    if (action != KEYBOARD_ACTION_NONE) {
+        ui->on_action(action, ui->callback_user_data);
+    }
     if (visual_changed) {
+        /* sticky/página: o redraw da faixa inteira já é o feedback — sem flash (e o
+         * flash pendente de antes morre junto, o estado da página pode ter mudado) */
+        if (ui->flash_timer_id) {
+            g_source_remove(ui->flash_timer_id);
+            ui->flash_timer_id = 0;
+        }
+        ui->flash_index = -1;
         gtk_widget_queue_draw_area(ui->drawing_area, 0, ui->keyboard_top, ui->screen_width,
                                     ui->screen_height - ui->keyboard_top);
+    } else if (tapped >= 0) {
+        /* tecla normal ou ação de menu: pisca invertida por um instante */
+        start_key_flash(ui, tapped);
     }
     return TRUE;
 }
 
-Ui *ui_create(const char *window_title, UiClickFn on_click, UiKeyFn on_key, void *user_data) {
+Ui *ui_create(const char *window_title, UiClickFn on_click, UiKeyFn on_key,
+              UiActionFn on_action, void *user_data) {
     Ui *ui = g_new0(Ui, 1);
     ui->on_click = on_click;
     ui->on_key = on_key;
+    ui->on_action = on_action;
     ui->callback_user_data = user_data;
+    ui->flash_index = -1;
     /* Resolução real detectada em runtime, não hardcoded — o mesmo binário serve qualquer
      * modelo de Kindle que conectar. */
     ui->screen_width = gdk_screen_width();
@@ -226,6 +291,9 @@ void ui_show_frame(Ui *ui, int width, int height, const uint32_t *argb32_pixels)
 void ui_destroy(Ui *ui) {
     if (!ui) {
         return;
+    }
+    if (ui->flash_timer_id) {
+        g_source_remove(ui->flash_timer_id);
     }
     if (ui->surface) {
         cairo_surface_destroy(ui->surface);

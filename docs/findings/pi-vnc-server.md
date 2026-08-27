@@ -1,5 +1,14 @@
 # Servidor VNC no lado do Pi
 
+**Nota de revisão (26/08)**: este documento registra a pesquisa e a evolução da sessão do
+Pi até o `l3afpad`/matchbox — histórico preservado como está, sem reescrever. A composição
+**atual** já mudou bem mais desde então (`xsettingsd` + Openbox + tint2 + `mousepad`, `Xft.dpi`
+192 como base congelada, canal de comando `kindow-helperd`) e vive **versionada** em
+[`pi/`](../../pi/) (`xstartup`, `tint2rc`, `install.sh`, `kindow-helperd`), que é a fonte de
+verdade sobre o que roda no Pi hoje — não este arquivo. Ver "Próximos passos" no
+[README](../../README.md) e o achado sobre a troca `l3afpad`→`mousepad` em
+[`kindle-hardware-test.md`](kindle-hardware-test.md).
+
 ## Contexto
 
 O Pi 3 Model B (1GB RAM, Raspberry Pi OS Lite, Debian Bookworm) está totalmente headless hoje

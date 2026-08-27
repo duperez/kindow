@@ -19,7 +19,8 @@ typedef enum {
     KEY_NORMAL, /* manda keysym (ou a variante shifted, se Shift armado) */
     KEY_SHIFT,  /* sticky: arma Shift pro próximo toque */
     KEY_CTRL,   /* sticky: arma Ctrl pro próximo toque */
-    KEY_PAGE,   /* alterna letras <-> símbolos */
+    KEY_PAGE,   /* alterna letras <-> símbolos; com Ctrl+Shift armados abre o MENU */
+    KEY_ACTION, /* página de menu: emite uma KeyboardAction local (nada vai pro servidor) */
 } KeyType;
 
 typedef struct {
@@ -29,13 +30,16 @@ typedef struct {
     uint32_t shifted; /* keysym com Shift armado; 0 = sem variante (manda o normal) */
     float units;      /* largura relativa dentro da linha (1.0 = tecla padrão) */
     KeyType type;
+    KeyboardAction action; /* só pra KEY_ACTION; zero-init nos demais */
 } KeyDef;
 
 /* Atalhos pra tabela ficar legível. Pra ASCII imprimível, keysym == código do caractere. */
-#define K(ch, lbl) {lbl, NULL, (uint32_t)(ch), 0, 1.0f, KEY_NORMAL}
-#define KS(ch, sh, lbl, shlbl) {lbl, shlbl, (uint32_t)(ch), (uint32_t)(sh), 1.0f, KEY_NORMAL}
-#define KW(ch, lbl, u) {lbl, NULL, (uint32_t)(ch), 0, u, KEY_NORMAL}
-#define KSW(ch, sh, lbl, shlbl, u) {lbl, shlbl, (uint32_t)(ch), (uint32_t)(sh), u, KEY_NORMAL}
+#define K(ch, lbl) {lbl, NULL, (uint32_t)(ch), 0, 1.0f, KEY_NORMAL, 0}
+#define KS(ch, sh, lbl, shlbl) \
+    {lbl, shlbl, (uint32_t)(ch), (uint32_t)(sh), 1.0f, KEY_NORMAL, 0}
+#define KW(ch, lbl, u) {lbl, NULL, (uint32_t)(ch), 0, u, KEY_NORMAL, 0}
+#define KSW(ch, sh, lbl, shlbl, u) \
+    {lbl, shlbl, (uint32_t)(ch), (uint32_t)(sh), u, KEY_NORMAL, 0}
 
 /* ---- Página 0: letras ---- */
 
@@ -60,33 +64,33 @@ static const KeyDef kRowHome[] = {
 };
 
 static const KeyDef kRowShift[] = {
-    {"Shift", NULL, 0, 0, 1.5f, KEY_SHIFT},
+    {"Shift", NULL, 0, 0, 1.5f, KEY_SHIFT, 0},
     KS('z', 'Z', "z", "Z"), KS('x', 'X', "x", "X"), KS('c', 'C', "c", "C"),
     KS('v', 'V', "v", "V"), KS('b', 'B', "b", "B"), KS('n', 'N', "n", "N"),
     KS('m', 'M', "m", "M"),
     /* "Bksp" em texto, não glifo ⌫ — a fonte do Kindle não tem o glifo (aparecia como
      * quadradinho/tofu, visto no hardware real). */
-    {"Bksp", NULL, KS_BACKSPACE, 0, 1.5f, KEY_NORMAL},
+    {"Bksp", NULL, KS_BACKSPACE, 0, 1.5f, KEY_NORMAL, 0},
 };
 
 static const KeyDef kRowSpaceLetters[] = {
-    {"?123", NULL, 0, 0, 1.5f, KEY_PAGE},
-    {"Ctrl", NULL, 0, 0, 1.5f, KEY_CTRL},
+    {"?123", NULL, 0, 0, 1.5f, KEY_PAGE, 0},
+    {"Ctrl", NULL, 0, 0, 1.5f, KEY_CTRL, 0},
     KS(',', ';', ",", ";"),
     KW(' ', "", 3.0f),
     KS('.', ':', ".", ":"),
-    {"Enter", NULL, KS_RETURN, 0, 2.0f, KEY_NORMAL},
+    {"Enter", NULL, KS_RETURN, 0, 2.0f, KEY_NORMAL, 0},
 };
 
 static const KeyDef kRowNav[] = {
-    {"Esc", NULL, KS_ESCAPE, 0, 1.25f, KEY_NORMAL},
-    {"Tab", NULL, KS_TAB, 0, 1.25f, KEY_NORMAL},
+    {"Esc", NULL, KS_ESCAPE, 0, 1.25f, KEY_NORMAL, 0},
+    {"Tab", NULL, KS_TAB, 0, 1.25f, KEY_NORMAL, 0},
     KSW('/', '?', "/", "?", 1.25f),
     KSW('-', '_', "-", "_", 1.25f),
-    {"←", NULL, KS_LEFT, 0, 1.25f, KEY_NORMAL},
-    {"↑", NULL, KS_UP, 0, 1.25f, KEY_NORMAL},
-    {"↓", NULL, KS_DOWN, 0, 1.25f, KEY_NORMAL},
-    {"→", NULL, KS_RIGHT, 0, 1.25f, KEY_NORMAL},
+    {"←", NULL, KS_LEFT, 0, 1.25f, KEY_NORMAL, 0},
+    {"↑", NULL, KS_UP, 0, 1.25f, KEY_NORMAL, 0},
+    {"↓", NULL, KS_DOWN, 0, 1.25f, KEY_NORMAL, 0},
+    {"→", NULL, KS_RIGHT, 0, 1.25f, KEY_NORMAL, 0},
 };
 
 /* ---- Página 1: símbolos (mesma fileira de números/nav; miolo trocado) ---- */
@@ -104,16 +108,47 @@ static const KeyDef kRowSym2[] = {
 static const KeyDef kRowSym3[] = {
     K('<', "<"), K('>', ">"), K('=', "="), K('+', "+"), K('_', "_"),
     K(':', ":"), K(';', ";"), K('?', "?"),
-    {"Bksp", NULL, KS_BACKSPACE, 0, 2.0f, KEY_NORMAL},
+    {"Bksp", NULL, KS_BACKSPACE, 0, 2.0f, KEY_NORMAL, 0},
 };
 
 static const KeyDef kRowSpaceSymbols[] = {
-    {"abc", NULL, 0, 0, 1.5f, KEY_PAGE},
-    {"Ctrl", NULL, 0, 0, 1.5f, KEY_CTRL},
+    {"abc", NULL, 0, 0, 1.5f, KEY_PAGE, 0},
+    {"Ctrl", NULL, 0, 0, 1.5f, KEY_CTRL, 0},
     K(',', ","),
     KW(' ', "", 3.0f),
     K('.', "."),
-    {"Enter", NULL, KS_RETURN, 0, 2.0f, KEY_NORMAL},
+    {"Enter", NULL, KS_RETURN, 0, 2.0f, KEY_NORMAL, 0},
+};
+
+/* ---- Página 2: menu do app (ações locais — ver KeyboardAction no .h). Um par A-/A+
+ * por camada de zoom, cada uma independente das outras; "Sair" fica na última fileira,
+ * longe dos pares de zoom que o usuário toca repetidamente. ---- */
+
+static const KeyDef kMenuBack[] = {
+    {"Voltar ao teclado", NULL, 0, 0, 1.0f, KEY_PAGE, 0},
+};
+
+static const KeyDef kMenuZoomApps[] = {
+    {"Apps  A-", NULL, 0, 0, 1.0f, KEY_ACTION, KEYBOARD_ACTION_ZOOM_APPS_OUT},
+    {"Apps  A+", NULL, 0, 0, 1.0f, KEY_ACTION, KEYBOARD_ACTION_ZOOM_APPS_IN},
+};
+
+static const KeyDef kMenuZoomDeco[] = {
+    {"Janela  A-", NULL, 0, 0, 1.0f, KEY_ACTION, KEYBOARD_ACTION_ZOOM_DECO_OUT},
+    {"Janela  A+", NULL, 0, 0, 1.0f, KEY_ACTION, KEYBOARD_ACTION_ZOOM_DECO_IN},
+};
+
+static const KeyDef kMenuZoomPanel[] = {
+    {"Painel  A-", NULL, 0, 0, 1.0f, KEY_ACTION, KEYBOARD_ACTION_ZOOM_PANEL_OUT},
+    {"Painel  A+", NULL, 0, 0, 1.0f, KEY_ACTION, KEYBOARD_ACTION_ZOOM_PANEL_IN},
+};
+
+static const KeyDef kMenuStatus[] = {
+    {"Status da conexão (log)", NULL, 0, 0, 1.0f, KEY_ACTION, KEYBOARD_ACTION_STATUS},
+};
+
+static const KeyDef kMenuQuit[] = {
+    {"Sair do Kindow", NULL, 0, 0, 1.0f, KEY_ACTION, KEYBOARD_ACTION_QUIT},
 };
 
 typedef struct {
@@ -135,7 +170,15 @@ static const RowDef kPageSymbols[KB_ROWS] = {
     ROW(kRowSym3), ROW(kRowSpaceSymbols), ROW(kRowNav),
 };
 
-#define KB_PAGES 2
+static const RowDef kPageMenu[KB_ROWS] = {
+    ROW(kMenuBack), ROW(kMenuZoomApps), ROW(kMenuZoomDeco),
+    ROW(kMenuZoomPanel), ROW(kMenuStatus), ROW(kMenuQuit),
+};
+
+#define KB_PAGES 3
+#define PAGE_LETTERS 0
+#define PAGE_SYMBOLS 1
+#define PAGE_MENU 2
 #define KB_MAX_KEYS 64
 
 typedef struct {
@@ -190,8 +233,12 @@ Keyboard *keyboard_create(int width_px, int height_px) {
     if (!keyboard) {
         return NULL;
     }
-    layout_page(kPageLetters, width_px, height_px, keyboard->places[0], &keyboard->counts[0]);
-    layout_page(kPageSymbols, width_px, height_px, keyboard->places[1], &keyboard->counts[1]);
+    layout_page(kPageLetters, width_px, height_px, keyboard->places[PAGE_LETTERS],
+                &keyboard->counts[PAGE_LETTERS]);
+    layout_page(kPageSymbols, width_px, height_px, keyboard->places[PAGE_SYMBOLS],
+                &keyboard->counts[PAGE_SYMBOLS]);
+    layout_page(kPageMenu, width_px, height_px, keyboard->places[PAGE_MENU],
+                &keyboard->counts[PAGE_MENU]);
     return keyboard;
 }
 
@@ -201,6 +248,12 @@ int keyboard_key_count(const Keyboard *keyboard) {
 
 KeyboardKeyView keyboard_key_view(const Keyboard *keyboard, int index) {
     const KeyPlace *place = &keyboard->places[keyboard->page][index];
+    /* Chord do menu: com Ctrl+Shift armados, a tecla de página vira a porta do menu —
+     * rótulo muda pra "Menu" e ganha destaque, pro recurso ser visível em vez de
+     * segredo (mesma engrenagem de rótulo dinâmico do Shift). */
+    bool menu_chord = keyboard->shift_armed && keyboard->ctrl_armed &&
+                      place->def->type == KEY_PAGE && keyboard->page != PAGE_MENU;
+
     KeyboardKeyView view = {
         .x = place->x,
         .y = place->y,
@@ -208,10 +261,12 @@ KeyboardKeyView keyboard_key_view(const Keyboard *keyboard, int index) {
         .h = place->h,
         /* Com Shift armado, a tecla mostra o que vai sair de verdade (q→Q, 1→!) — o
          * toggle de Shift já marca visual_changed, então o redraw acontece sozinho. */
-        .label = (keyboard->shift_armed && place->def->shifted_label)
+        .label = menu_chord ? "Menu"
+                 : (keyboard->shift_armed && place->def->shifted_label)
                      ? place->def->shifted_label
                      : place->def->label,
-        .highlighted = (place->def->type == KEY_SHIFT && keyboard->shift_armed) ||
+        .highlighted = menu_chord ||
+                       (place->def->type == KEY_SHIFT && keyboard->shift_armed) ||
                        (place->def->type == KEY_CTRL && keyboard->ctrl_armed),
     };
     return view;
@@ -228,9 +283,18 @@ static const KeyPlace *find_key(const Keyboard *keyboard, int x, int y) {
     return NULL;
 }
 
+int keyboard_key_index_at(const Keyboard *keyboard, int x, int y) {
+    const KeyPlace *place = find_key(keyboard, x, y);
+    if (!place) {
+        return -1;
+    }
+    return (int)(place - keyboard->places[keyboard->page]);
+}
+
 int keyboard_handle_tap(Keyboard *keyboard, int x, int y,
                         KeyboardEvent out_events[KEYBOARD_MAX_EVENTS],
-                        bool *out_visual_changed) {
+                        KeyboardAction *out_action, bool *out_visual_changed) {
+    *out_action = KEYBOARD_ACTION_NONE;
     *out_visual_changed = false;
 
     const KeyPlace *place = find_key(keyboard, x, y);
@@ -248,8 +312,20 @@ int keyboard_handle_tap(Keyboard *keyboard, int x, int y,
         *out_visual_changed = true;
         return 0;
     case KEY_PAGE:
-        keyboard->page = 1 - keyboard->page;
+        if (keyboard->page == PAGE_MENU) {
+            keyboard->page = PAGE_LETTERS; /* "Voltar ao teclado" */
+        } else if (keyboard->shift_armed && keyboard->ctrl_armed) {
+            /* chord Ctrl+Shift: abre o menu e consome os modificadores */
+            keyboard->page = PAGE_MENU;
+            keyboard->shift_armed = false;
+            keyboard->ctrl_armed = false;
+        } else {
+            keyboard->page = 1 - keyboard->page; /* letras <-> símbolos */
+        }
         *out_visual_changed = true;
+        return 0;
+    case KEY_ACTION:
+        *out_action = place->def->action;
         return 0;
     case KEY_NORMAL:
         break;

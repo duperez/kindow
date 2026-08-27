@@ -1,0 +1,40 @@
+# tint2 do Kindow — painel claro de alto contraste pro e-ink, alvos de toque grandes.
+# background 1: painel (branco, borda preta em cima)
+rounded = 0
+border_width = 1
+background_color = #ffffff 100
+border_color = #000000 100
+
+# background 2: tarefa ativa (invertida — mesmo feedback do teclado do cliente)
+rounded = 0
+border_width = 1
+background_color = #000000 100
+border_color = #000000 100
+
+panel_items = LTC
+panel_position = bottom center horizontal
+panel_size = 100% 64
+panel_background_id = 1
+panel_padding = 4 2 8
+
+launcher_icon_size = 48
+launcher_padding = 8 6 12
+launcher_item_app = /usr/share/applications/org.xfce.mousepad.desktop
+launcher_item_app = /usr/share/applications/pcmanfm.desktop
+
+taskbar_mode = single_desktop
+taskbar_padding = 8 4 8
+
+task_text = 1
+task_icon = 1
+task_maximum_size = 260 60
+task_padding = 10 4 10
+task_font = sans 11
+task_font_color = #000000 100
+task_active_background_id = 2
+task_active_font_color = #ffffff 100
+
+time1_format = %H:%M
+clock_font = sans 11
+clock_font_color = #000000 100
+clock_padding = 10 4

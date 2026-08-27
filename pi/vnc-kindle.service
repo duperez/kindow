@@ -1,0 +1,16 @@
+[Unit]
+Description=Servidor TigerVNC para a PoC de tela sem fio do Kindle
+After=network.target
+
+[Service]
+Type=forking
+User=pi
+WorkingDirectory=/home/pi
+ExecStartPre=-/usr/bin/vncserver -kill :1 > /dev/null 2>&1
+ExecStart=/usr/bin/vncserver :1 -geometry 1024x758 -depth 24 -localhost no -SecurityTypes None --I-KNOW-THIS-IS-INSECURE
+ExecStop=/usr/bin/vncserver -kill :1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

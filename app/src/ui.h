@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "keyboard.h" /* KeyboardAction — as ações do menu atravessam a UI intactas */
+
 /*
  * Adapter de apresentação: tudo que é GTK/GDK/Cairo vive atrás deste header — janela,
  * área de desenho, pintura do frame, e o teclado virtual (uma faixa fixa reservada na
@@ -19,11 +21,15 @@ typedef struct Ui Ui;
 
 typedef void (*UiClickFn)(int x, int y, void *user_data);
 typedef void (*UiKeyFn)(uint32_t keysym, bool down, void *user_data);
+/* Ação da página de menu do teclado (sair, zoom...) — a UI só transporta; o significado
+ * é decisão do wiring (main.c). */
+typedef void (*UiActionFn)(KeyboardAction action, void *user_data);
 
 /* Cria e mostra a janela em tela cheia, com a faixa do teclado já reservada. window_title
  * vem do chamador porque o formato é exigência da plataforma (ver
  * kindle_platform_window_title), não decisão de UI. */
-Ui *ui_create(const char *window_title, UiClickFn on_click, UiKeyFn on_key, void *user_data);
+Ui *ui_create(const char *window_title, UiClickFn on_click, UiKeyFn on_key,
+              UiActionFn on_action, void *user_data);
 
 /* Área útil pro frame remoto: a tela real (detectada em runtime — o mesmo binário serve
  * qualquer modelo de Kindle) MENOS a faixa reservada do teclado. É este tamanho que deve

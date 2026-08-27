@@ -33,8 +33,28 @@ typedef struct {
  * Ctrl up (quando o sticky Ctrl está armado). */
 #define KEYBOARD_MAX_EVENTS 4
 
+/* Ações locais do app, emitidas pela página de MENU do teclado (a faixa do teclado é o
+ * único espaço de tela disponível sem roubar área do frame — decisão de 26/08: o menu é
+ * uma terceira página, alcançada armando Ctrl+Shift e tocando a tecla de página, que
+ * nesse estado mostra "Menu"). Diferente de um keysym, uma ação NÃO vai pro servidor
+ * VNC — é o chamador (main.c) que decide o que ela significa. */
+typedef enum {
+    KEYBOARD_ACTION_NONE = 0,
+    KEYBOARD_ACTION_QUIT,   /* sair do app local */
+    KEYBOARD_ACTION_STATUS, /* logar estado da conexão (debug sem SSH) */
+    /* Zoom remoto em três camadas INDEPENDENTES (via kindow-helperd no Pi — decisão de
+     * 26/08): apps = conteúdo (Xft/DPI via xsettingsd), deco = decoração de janela
+     * (titlebar/botões do Openbox), panel = painel (fontes do tint2). */
+    KEYBOARD_ACTION_ZOOM_APPS_IN,
+    KEYBOARD_ACTION_ZOOM_APPS_OUT,
+    KEYBOARD_ACTION_ZOOM_DECO_IN,
+    KEYBOARD_ACTION_ZOOM_DECO_OUT,
+    KEYBOARD_ACTION_ZOOM_PANEL_IN,
+    KEYBOARD_ACTION_ZOOM_PANEL_OUT,
+} KeyboardAction;
+
 /* Visão de uma tecla pra desenho: retângulo em pixels (relativo à área do teclado),
- * rótulo e se deve ser destacada (modificador armado). */
+ * rótulo e se deve ser destacada (modificador armado / chord de menu disponível). */
 typedef struct {
     int x, y, w, h;
     const char *label;
@@ -51,14 +71,21 @@ int keyboard_key_count(const Keyboard *keyboard);
 /* Tecla de índice 0 <= index < keyboard_key_count() da página atual. */
 KeyboardKeyView keyboard_key_view(const Keyboard *keyboard, int index);
 
+/* Índice (na página atual) da tecla sob (x, y), ou -1 se o toque não caiu em tecla.
+ * Consulta pura, sem efeito — existe pro chamador saber QUAL tecla foi tocada (ex.: o
+ * flash de feedback visual do ui.c), separada do handle_tap que muda estado. */
+int keyboard_key_index_at(const Keyboard *keyboard, int x, int y);
+
 /* Processa um toque em (x, y), relativo à área do teclado. Escreve em out_events os
  * eventos de tecla a mandar pro servidor (na ordem) e retorna quantos são — 0 quando o
  * toque não gera evento nenhum (caiu fora de tecla, ou foi num modificador/troca de
- * página, que só muda estado local). *out_visual_changed avisa se o desenho do teclado
+ * página, que só muda estado local). *out_action recebe a ação local se o toque caiu
+ * numa tecla da página de menu (KEYBOARD_ACTION_NONE caso contrário) — eventos e ação
+ * nunca vêm juntos no mesmo toque. *out_visual_changed avisa se o desenho do teclado
  * precisa ser refeito (modificador armado/desarmado ou página trocada). */
 int keyboard_handle_tap(Keyboard *keyboard, int x, int y,
                         KeyboardEvent out_events[KEYBOARD_MAX_EVENTS],
-                        bool *out_visual_changed);
+                        KeyboardAction *out_action, bool *out_visual_changed);
 
 void keyboard_destroy(Keyboard *keyboard);
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Canal de comando do Kindow (zoom/dpi ao vivo a partir do Kindle)
+After=network.target
+
+[Service]
+User=pi
+ExecStart=/usr/local/bin/kindow-helperd
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

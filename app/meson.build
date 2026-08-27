@@ -9,6 +9,7 @@ sources = files(
     'src/keyboard.c',
     'src/session.c',
     'src/kindle_platform.c',
+    'src/remote_control.c',
     'src/vnc_client.c',
     'src/pixel_convert.c',
 )

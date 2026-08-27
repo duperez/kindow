@@ -1,0 +1,22 @@
+#!/bin/sh
+# Sessão X do Kindow no Pi (revisões de 26/08 — histórico em docs/findings/pi-vnc-server.md):
+#
+# xsettingsd: fonte de verdade do Xft/DPI pros apps GTK — o kindow-helperd muda o valor
+# ao vivo (SIGHUP) quando o Kindle pede zoom de apps, sem reiniciar app nenhum. O xrdb
+# abaixo fica CONGELADO em 192 de propósito (decisão de 26/08): tint2 e Openbox derivam
+# pixels dele, e congelá-lo é o que torna os três controles de zoom (apps/deco/painel)
+# independentes entre si — ver pi/kindow-helperd.
+xsettingsd &
+# Xft.dpi: a tela do Kindle tem ~300dpi fisicos; sem isso o X assume 96 e tudo sai
+# minusculo. 192 = 2x como ponto de partida. Vale pra qualquer toolkit (GTK/Qt).
+printf "Xft.dpi: 192\n" | xrdb -merge
+# Desktop de verdade no lugar do matchbox — Openbox (janelas com titlebar/fechar/mover/
+# minimizar, decoracoes escalam com o Xft.dpi) + tint2 (taskbar com launchers).
+# matchbox anterior: matchbox-window-manager -use_titlebar no
+tint2 &
+# mousepad em vez de l3afpad (revisão 26/08): o l3afpad PINA a fonte da área de edição
+# (override próprio que ignora o Xft/DPI — confirmado em screenshot no hardware: menus
+# escalavam, texto digitado não). O mousepad usa a fonte monoespaçada do sistema, que vem
+# do XSETTINGS — o zoom de Apps vale pro texto também, ao vivo.
+mousepad &
+exec openbox

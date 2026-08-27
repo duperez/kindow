@@ -18,10 +18,30 @@ de desempate, **o que é mais simples de fazer**:
    teste no hardware revelou e resolveu a travadinha do Enter (encoding Raw → ZRLE, ver
    `findings/rfb-protocol.md`).
 
-2. **GUI mais complexa com editor de texto** — trocar o `xterm` por um editor (ou um WM
-   leve com apps) no `xstartup` do Pi. Quase todo o trabalho é server-side e simples — o
-   cliente não muda nada, é só conteúdo novo na mesma tela. Vem depois do teclado porque
-   um editor sem teclado não serve pra nada.
+   **Polimento pendente anotado (26/08), feito no mesmo dia**: feedback visual de toque
+   nas teclas — tecla normal/ação pisca invertida (mesmo visual das sticky Shift/Ctrl
+   armadas, só que momentânea, ~180ms — `KEY_FLASH_MS` em `ui.c`); sticky/página não
+   piscam, porque o feedback delas já é o próprio estado. Redraw só do retângulo da tecla
+   (não a faixa inteira). Cuidado de e-ink que motivou a checagem — custo de dois redraws
+   parciais por toque atrapalhar digitação rápida — **validado no hardware real: não
+   atrapalha**.
+
+2. ~~**GUI mais complexa com editor de texto**~~ — **feito (26/08)**: `l3afpad` no lugar
+   do `xterm` no `xstartup` do Pi (server-side, cliente intocado), com `Xft.dpi: 192` via
+   `xrdb` pra compensar os ~300dpi físicos do Kindle (fonte E menus 2x, agnóstico de
+   toolkit) e matchbox sem titlebar (`-use_titlebar no` — o X de fechar só derrubava a
+   sessão, que o systemd religa; sair de verdade é papel do futuro menu do Kindow).
+   Digitação, menus e diálogos validados por toque no device.
+
+   **Desdobramento anotado (26/08) — desktop completo com gerência de janelas**: quando
+   evoluir de app único pra desktop de verdade (fechar/mover/minimizar janelas por toque),
+   o matchbox sai de cena por design (é WM de quiosque: não move nem redimensiona janela).
+   Candidato: **Openbox** — decorações escalam com a fonte do título (que segue o
+   `Xft.dpi` já configurado), botões de janela em tamanho de dedo via config. Junto vêm:
+   painel/taskbar pra minimizar/alternar (ex. `tint2`), mover janela só por contorno
+   (arrasto opaco = tempestade de refresh no e-ink), e a dependência do item de
+   scroll/arrasto no cliente (mover titlebar exige press-move-release, mesmo mecanismo do
+   swipe do item 3).
 
 3. **Scroll** — hoje não há como rolar conteúdo remoto a partir do Kindle. Em VNC, scroll
    é "botão de roda": `SendPointerEvent` com os bits dos botões 4 (cima) / 5 (baixo) — o
@@ -41,18 +61,37 @@ de desempate, **o que é mais simples de fazer**:
    (só estende seleção) — só passa a valer a pena quando existir uma GUI onde clique
    direito significa alguma coisa.
 
-5. **Menu do app** — um menu local no Kindle (overlay ou gesto reservado) com: sair da
-   aplicação (hoje só via SSH), desconectar do Pi e conectar em outro (pedindo IP/porta e
-   demais dados necessários), lembrando os dados da última sessão (persistência local em
-   `/mnt/us/kindow/`), e mudar tamanho de fonte. É o maior item client-side da fila
-   (UI de formulário + estados de conexão + persistência), por isso vem depois dos ganhos
-   rápidos. Sub-questão a pesquisar: tamanho de fonte hoje é configuração do `xterm` no
-   *servidor* (`-fs`, ver `findings/pi-vnc-server.md`) — mudar a partir do cliente exige um
-   mecanismo próprio (a investigar; não é um simples ajuste local). Também entra aqui, como
-   opção configurável: **mostrar/esconder o teclado virtual por gesto** (decisão de 26/08:
-   o teclado nasceu como faixa fixa reservada — melhor pro e-ink, zero refresh extra —, mas
-   a variante overlay/toggle fica como escolha futura do usuário via este menu, não como
-   substituição da faixa fixa).
+5. **Menu do app** — **parcialmente feito (26/08)**. Saiu diferente do que este item
+   previa: em vez de overlay/gesto, virou uma terceira página do teclado virtual (chord
+   Ctrl+Shift + tecla de página, rótulo "Menu" quando arma — ver "Próximos passos" no
+   README). **Sair da aplicação** ✓ feito (hoje só via SSH deixou de ser verdade). **Mudar
+   tamanho de fonte** ✓ feito, e foi além do pedido original: virou zoom remoto em três
+   camadas independentes (Apps/Janela/Painel), não só uma fonte única — ver
+   `pi/kindow-helperd`. A sub-questão que este item deixava em aberto ("tamanho de fonte
+   hoje é configuração do `xterm` no servidor, mudar do cliente exige mecanismo próprio")
+   está **respondida**: o mecanismo é o `kindow-helperd`, um canal de comando TCP lateral
+   que o RFB não cobre.
+
+   **Ainda pendente** (o que sobrou do item original): desconectar do Pi e conectar em
+   outro (pedindo IP/porta e demais dados necessários), lembrando os dados da última
+   sessão (persistência local em `/mnt/us/kindow/`); e, como opção configurável,
+   **mostrar/esconder o teclado virtual por gesto** (decisão de 26/08: o teclado nasceu
+   como faixa fixa reservada — melhor pro e-ink, zero refresh extra —, mas a variante
+   overlay/toggle fica como escolha futura do usuário via este menu, não como substituição
+   da faixa fixa).
+
+   **Sub-ideia registrada (26/08) — bootstrap do Pi pelo próprio Kindle**: no formulário
+   de conexão deste menu, oferecer um checkbox "instalar e iniciar o serviço no Pi": o
+   usuário informa IP + usuário + senha, o app abre um SSH pro Pi, verifica se o
+   `kindow-helperd` existe, envia os arquivos (de um diretório temporário), inicia o
+   serviço, testa e só então conecta — onboarding de um Pi virgem sem tocar em terminal.
+   Pré-requisitos técnicos anotados: (a) roteamento de input local — parcialmente resolvido
+   pelo mecanismo `KEY_ACTION`/`KeyboardAction` que a página de menu já usa (callback
+   `ui`→`main`, nunca vai pro servidor), mas isso cobre botões de ação fixos, não um
+   formulário de texto livre pra digitar IP/usuário/senha, que ainda não existe; (b) SSH a
+   partir do Kindle (o jailbreak traz dropbear/`dbclient`, mas automatizar senha exige
+   lidar com pty — não tem `sshpass` no firmware), (c) o instalador idempotente em
+   `pi/install.sh` já existe e é o que o bootstrap reaproveitaria por baixo.
 
 6. **Mudar orientação da tela (paisagem)** — rotação de 90° feita **no cliente**, dentro
    do pipeline que já é nosso: rotacionar na conversão de pixel, transformar as coordenadas

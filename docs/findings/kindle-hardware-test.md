@@ -308,10 +308,72 @@ na fonte que o Kindle carrega, esse glifo não existe e o Cairo desenhava o "tof
 (usadas na página de símbolos/navegação) renderizam normalmente nessa mesma fonte — o problema é
 específico do glifo de backspace, não de Unicode em geral nesse device.
 
+## Sessão de 26/08 (parte 3): menu do app, zoom em 3 camadas, mousepad, flash de tecla
+
+Resultado: menu do app (terceira página do teclado), zoom remoto em três camadas
+independentes (`kindow-helperd`), troca `l3afpad`→`mousepad` e flash de tecla, todos
+validados no device (`reviewer` com recheck, `tester` com 15 casos passando em
+`test_keyboard.c`). Achados de investigação abaixo — nenhum é bug corrigido no sentido dos
+achados #1-#10, mas técnica/comportamento real que vale registrar pra próxima vez.
+
+### Achado #11: `l3afpad` pina a própria fonte de edição — trocado por `mousepad`
+
+**Sintoma**: depois de aplicar o zoom de Apps (Xft/DPI via `xsettingsd`), os menus do
+`l3afpad` escalavam ao vivo certinho, mas o texto digitado na área de edição continuava do
+mesmo tamanho, qualquer que fosse o DPI aplicado.
+
+**Causa raiz**: o `l3afpad` tem um override próprio de fonte pra área de edição
+(`GtkTextView`) que ignora Xft/DPI — não é bug do `xsettingsd` nem do `kindow-helperd`, é o
+app que não segue a configuração do sistema pra aquele widget específico.
+
+**Técnica de diagnóstico**: comparação por screenshot no Pi, via `import` (ImageMagick)
+capturando o display `:1` antes/depois de mudar o DPI, com `xdotool type` digitando um
+texto de teste no editor pra ter conteúdo real de sobra pra comparar (menu estático sozinho
+não bastava pra flagrar o problema). **Pegadinha registrada**: uma primeira tentativa de
+comparar por métrica de brilho médio numa região fixa da imagem deu resultado inconsistente
+— a janela mudava de posição entre screenshots (matchbox/Openbox reposicionando), então a
+região amostrada não era sempre a mesma parte real da tela. Comparar o screenshot completo
+a olho foi mais confiável que qualquer métrica automática nessa investigação.
+
+**Correção**: `l3afpad` trocado por `mousepad` no `xstartup` do Pi ([`pi/xstartup`](../../pi/xstartup))
+— usa a fonte monoespaçada do sistema, a que vem do XSETTINGS, então o zoom de Apps também
+re-escala o texto digitado, ao vivo, confirmado por screenshot.
+
+**Critério novo pra escolher apps futuros pra essa sessão**: apps que pinam a própria fonte
+de conteúdo (em vez de seguir XSETTINGS) não acompanham o zoom de Apps — vale testar isso
+antes de adotar um app novo, não assumir que "é GTK" já garante.
+
+### Achado #12: `SO_SNDTIMEO` também limita o `connect()` no Linux, não só o `write()`
+
+Medido durante a implementação de `remote_control.c` (cliente do `kindow-helperd`): contra
+um host "buraco-negro" (SYN descartado sem resposta, sem RST), setar
+`SO_SNDTIMEO`/`SO_RCVTIMEO` no socket **antes** do `connect()` faz o próprio `connect()`
+retornar em ~3s (o timeout configurado), não nos ~2 minutos que `tcp_syn_retries` levaria
+por padrão sem esse ajuste. Não é garantia POSIX — é comportamento do Linux (único alvo
+aqui, o Kindle) — mas é o que sustenta usar um único `IO_TIMEOUT_SECONDS` como teto pra toda
+a transação (`connect`+`write`+`read`) em vez de um mecanismo de timeout assíncrono mais
+complexo. Trade-off documentado no próprio `remote_control.h`: as chamadas são bloqueantes
+no thread do GTK, aceitável porque o pior caso de UI travada fica limitado a esses poucos
+segundos, e são disparadas só por toque explícito do usuário no menu.
+
+### Achado #13: o self-match de `pgrep`/`pkill` se estende a qualquer comando que mencione o caminho do processo
+
+Achado conhecido de `pgrep -f`/`pkill -f`: dar match no próprio processo que roda a busca,
+porque a linha de comando de busca aparece na lista de processos. Confirmado de novo aqui
+numa variante mais ampla: **qualquer** comando rodado via SSH que mencione o caminho do
+processo-alvo na própria linha de comando (não só `pgrep`/`pkill` — por exemplo um `grep`,
+um `ps aux | grep <caminho>`, ou o próprio comando remoto do SSH citando o caminho) pode
+aparecer na lista de processos e se autoincluir num filtro por padrão de texto. Mordeu mais
+de uma vez nas sessões de deploy/debug via SSH deste projeto. Mitigação já em uso no
+`kindow-helperd` (`apply_dpi`, ver [`pi/kindow-helperd`](../../pi/kindow-helperd)): usar
+`pkill -x <nome-exato>` em vez de match por substring/caminho, sempre que o alvo tiver nome
+de processo estável e sem variação de invocação.
+
 ## Verificação (majoritariamente), não medição — exceto onde marcado
 
 Este documento registra sobretudo o que foi observado e corrigido nas sessões de teste — resolução
 do device, comportamento do TigerVNC, mecânica de deploy. As seções "Latência medida no hardware
-real" e "Achado #9" (ambas de 26/08) são a exceção deliberada: números de `clock_gettime`/
-`rx_bytes` de verdade, não estimativa. O resto segue confirmado/válido até prova em contrário (ex:
-em outro modelo de Kindle, ou versão diferente do TigerVNC).
+real", "Achado #9" e "Achado #12" (todas de 26/08) são a exceção deliberada: números de
+`clock_gettime`/`rx_bytes`/tempo de `connect()` de verdade, não estimativa. O resto segue
+confirmado/válido até prova em contrário (ex: em outro modelo de Kindle, ou versão diferente do
+TigerVNC).
