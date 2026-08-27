@@ -215,7 +215,11 @@ cima (ver
 Corrigido replicando o mesmo padrão no `kindow-client`: `lipc-set-prop com.lab126.powerd
 preventScreenSaver=1` no início, `=0` em todo caminho de saída alcançável (destruição da janela,
 `SIGTERM` — o sinal que o `kill` do processo de deploy manda —, e `SIGINT` via
-`g_unix_signal_add_watch_full`). `SIGKILL` continua sendo o único caminho que deixa a trava presa
+`g_unix_signal_add_watch_full`). Desde o refactor Ports & Adapters leve de 26/08, o comando
+`lipc-set-prop` em si fica isolado em `kindle_platform_keep_awake()`
+([`app/src/kindle_platform.c`](../../app/src/kindle_platform.c)); `main.c` só chama essa função
+no início e depois de `gtk_main()` retornar, cobrindo os mesmos caminhos de saída de antes.
+`SIGKILL` continua sendo o único caminho que deixa a trava presa
 até reboot (nenhum handler de sinal sobrevive a `SIGKILL`, por definição). Testado nos dois
 sentidos ao vivo no device (screensaver não dispara com o app aberto; volta a disparar depois que
 o app fecha normalmente).
@@ -224,11 +228,15 @@ o app fecha normalmente).
 
 Originalmente `main.c` escutava `SIGHUP` (`g_unix_signal_add_watch_full`) pra disparar o mesmo
 `refresh_frame()` que o botão "Atualizar" chamava — `kill -HUP <pid>` via SSH tinha o mesmo efeito
-de tocar no botão, sem precisar acertar a tela fisicamente. **Mudou hoje (26/08)**: com o modelo
-de conexão persistente, chamar `vnc_client_start_updates()` de novo na mesma conexão violaria o
-contrato da API (dois pedidos incrementais pendentes no servidor) — então `SIGHUP` não força mais
-refresh, só imprime o status da conexão no log. Continua útil como ferramenta de debug (confirmar
-que o app está vivo e conectado sem precisar tocar a tela), só que com escopo menor que antes.
+de tocar no botão, sem precisar acertar a tela fisicamente. **Mudou no mesmo dia (26/08)**: com o
+modelo de conexão persistente, chamar `vnc_client_start_updates()` de novo na mesma conexão
+violaria o contrato da API (dois pedidos incrementais pendentes no servidor) — então `SIGHUP` não
+força mais refresh, só imprime o status da conexão no log. `main.c` continua registrando o
+handler do sinal (é wiring), mas quem sabe o que logar é `session_log_status()`
+([`app/src/session.c`](../../app/src/session.c), depois do refactor Ports & Adapters leve do
+mesmo dia — antes a lógica de status vivia dentro do próprio handler em `main.c`). Continua útil
+como ferramenta de debug (confirmar que o app está vivo e conectado sem precisar tocar a tela),
+só que com escopo menor que antes.
 **`SIGUSR1` não funciona** nesse sysroot específico — a versão de `glib` vendorizada só aceita
 `SIGHUP`/`SIGINT`/`SIGTERM` em `g_unix_signal_add_watch_full` (confirmado por erro em runtime:
 `assertion 'signum == SIGHUP || signum == SIGINT || signum == SIGTERM' failed`). É uma ferramenta

@@ -183,15 +183,17 @@ surpresa pra decidir depois.
 4. ~~`rfbGetClient(8,3,4)` → conectar → `MallocFrameBuffer`/`FinishedFrameBufferUpdate` →
    pedir e esperar atualização~~ — **feito**: implementado em
    [`app/src/vnc_client.c`](../../app/src/vnc_client.c) (módulo isolado, ver princípio de
-   isolamento na seção "O que já decidimos" do README). Fluxo atual (conexão persistente):
-   `vnc_client_connect()` → `vnc_client_get_fd()` (registrado no loop do GTK via
-   `GIOChannel`/`g_io_add_watch`, ver seção de integração acima) → `vnc_client_start_updates()`
-   uma única vez → `vnc_client_handle_messages()` a cada sinal de leitura no fd →
-   `vnc_client_disconnect()` ao encerrar.
-5. ~~`SendPointerEvent` com toque~~ — **feito**: `vnc_client_send_pointer()`, usado em
-   [`app/src/main.c`](../../app/src/main.c) pra traduzir clique na `GtkDrawingArea` em
-   `PointerEvent`. `SendKeyEvent`/`keysym.h` **ainda não implementado** — a PoC atual só cobre
-   toque, não teclado (não era o foco do "minimamente usável" inicial).
+   isolamento na seção "O que já decidimos" do README). Fluxo atual (conexão persistente),
+   orquestrado por [`app/src/session.c`](../../app/src/session.c) (refactor Ports & Adapters
+   leve de 26/08 — antes vivia em `main.c`): `vnc_client_connect()` → `vnc_client_get_fd()`
+   (registrado no loop do GLib via `GIOChannel`/`g_io_add_watch`, ver seção de integração
+   acima) → `vnc_client_start_updates()` uma única vez → `vnc_client_handle_messages()` a cada
+   sinal de leitura no fd → `vnc_client_disconnect()` ao encerrar.
+5. ~~`SendPointerEvent` com toque~~ — **feito**: `vnc_client_send_pointer()`, chamado por
+   `session_send_click()` em [`app/src/session.c`](../../app/src/session.c) a partir do toque
+   que [`app/src/ui.c`](../../app/src/ui.c) captura na `GtkDrawingArea` e repassa via callback
+   até virar `PointerEvent`. `SendKeyEvent`/`keysym.h` **ainda não implementado** — a PoC atual
+   só cobre toque, não teclado (não era o foco do "minimamente usável" inicial).
 6. ~~Resize automático pra bater com a resolução real de qualquer Kindle~~ — **feito**:
    `vnc_client_request_desktop_size()`, extensão RFB `SetDesktopSize`/`ExtDesktopSize`. Três
    bugs reais na lib vendorizada foram encontrados e contornados nesse processo (endianTest não

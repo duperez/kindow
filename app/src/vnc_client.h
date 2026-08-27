@@ -39,7 +39,9 @@ int vnc_client_get_fd(const VncClient *client);
  * toda vez que vnc_client_handle_messages processar uma FramebufferUpdate, a própria
  * libvncclient dispara sozinha o próximo pedido incremental internamente (confirmado lendo
  * HandleRFBServerMessage em rfbclient.c ~linha 2564) — o servidor só responde de novo quando
- * o conteúdo realmente mudar. Chamar só uma vez por conexão, nunca de novo depois. */
+ * o conteúdo realmente mudar. Chamar só uma vez por conexão, nunca de novo depois — o
+ * contrato é imposto pelo próprio módulo: uma segunda chamada retorna false com erro, sem
+ * mandar nada pro servidor. */
 bool vnc_client_start_updates(VncClient *client, char **out_error);
 
 /* Processa uma leitura pendente no fd (chamar quando o loop de eventos sinalizar dado

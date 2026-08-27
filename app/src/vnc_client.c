@@ -1,18 +1,23 @@
 #include "vnc_client.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include <rfb/rfbclient.h>
 
 #include "pixel_convert.h"
+#include "timing.h"
 
 struct VncClient {
     rfbClient *rfb;
     bool frame_ready;
     bool got_pixels;
+    /* Trava do contrato "vnc_client_start_updates só uma vez por conexão" (ver .h) —
+     * documentação sozinha já quase foi violada uma vez (um handler de sinal chamando de
+     * novo, pego em review); melhor o próprio módulo recusar do que confiar no comentário. */
+    bool updates_started;
 };
 
 /* Qualquer endereço único serve de "tag" pra rfbClientSetClientData/GetClientData. */
@@ -148,6 +153,11 @@ int vnc_client_get_fd(const VncClient *client) {
 
 bool vnc_client_start_updates(VncClient *client, char **out_error) {
     rfbClient *rfb = client->rfb;
+    if (client->updates_started) {
+        set_error(out_error, "vnc_client_start_updates já foi chamado nessa conexão");
+        return false;
+    }
+    client->updates_started = true;
     client->frame_ready = false;
     client->got_pixels = false;
 
@@ -182,12 +192,11 @@ static void convert_and_emit(rfbClient *rfb, VncFrameReadyFn on_frame, void *use
         .blue_max = pf->blueMax,
     };
 
-    struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
+    struct timespec t0 = timing_now();
     pixel_convert_to_grayscale_argb32(rfb->frameBuffer, width, height, &format, pixels);
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    long convert_ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
-    rfbClientLog("kindow: conversão de pixel (%dx%d) levou %ld ms\n", width, height, convert_ms);
+    struct timespec t1 = timing_now();
+    fprintf(stderr, "kindow: conversão de pixel (%dx%d) levou %ld ms\n", width, height,
+            timing_elapsed_ms(t0, t1));
 
     on_frame(width, height, pixels, user_data);
     free(pixels);
@@ -264,7 +273,8 @@ bool vnc_client_request_desktop_size(VncClient *client, int width, int height,
     screen.width = swap16_if_le(rfb, (uint16_t)width);
     screen.height = swap16_if_le(rfb, (uint16_t)height);
 
-    rfbClientLog("kindow: pedindo redimensionamento da tela remota pra %dx%d\n", width, height);
+    fprintf(stderr, "kindow: pedindo redimensionamento da tela remota pra %dx%d\n", width,
+            height);
     if (!WriteToRFBServer(rfb, (char *)&sdm, sz_rfbSetDesktopSizeMsg) ||
         !WriteToRFBServer(rfb, (char *)&screen, sz_rfbExtDesktopScreen)) {
         set_error(out_error, "falha ao pedir redimensionamento de tela");
@@ -299,7 +309,7 @@ void vnc_client_send_pointer(VncClient *client, int x, int y, int button_mask) {
         /* write() falhou — a conexão provavelmente caiu. Não propaga erro daqui (a
          * assinatura é void, decisão de manter a chamada simples pro chamador); o watch de
          * G_IO_HUP/G_IO_ERR no fd (main.c) ainda vai pegar a queda de conexão sozinho. */
-        rfbClientLog("kindow: falha ao mandar PointerEvent, conexão provavelmente caiu\n");
+        fprintf(stderr, "kindow: falha ao mandar PointerEvent, conexão provavelmente caiu\n");
     }
 }
 

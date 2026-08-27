@@ -5,6 +5,9 @@ vnc_dep = dependency('libvncclient')
 
 sources = files(
     'src/main.c',
+    'src/ui.c',
+    'src/session.c',
+    'src/kindle_platform.c',
     'src/vnc_client.c',
     'src/pixel_convert.c',
 )

@@ -96,10 +96,11 @@ As três frentes de pesquisa terminaram, cada uma com decisões concretas regist
    versão) registrados em [`libvncclient-api.md`](docs/findings/libvncclient-api.md).
 3. ~~Escrever o app GTK do Kindle~~ — **escrito, cross-compilado, revisado e com teste
    unitário**: [`app/`](app/) — módulo isolado `vnc_client.c`/`.h` (único lugar que fala com
-   `libvncclient`), `main.c` com uma `GtkDrawingArea` como único filho direto da janela, tocar
-   na imagem manda um `PointerEvent`. Conversão de pixel pra escala de cinza extraída num
-   módulo puro (`pixel_convert.c`, com LUTs por canal + loops especializados por bpp) com 10
-   casos de teste unitário.
+   `libvncclient`), uma `GtkDrawingArea` como único filho direto da janela, tocar na imagem
+   manda um `PointerEvent`. Conversão de pixel pra escala de cinza extraída num módulo puro
+   (`pixel_convert.c`, com LUTs por canal + loops especializados por bpp) com 10 casos de
+   teste unitário. **Revisão (refactor Ports & Adapters leve, 26/08)**: a lógica que antes
+   morava em `main.c` foi separada em módulos — ver "Estrutura do repositório".
 4. ~~Testar ponta a ponta no hardware real~~ — **feito, funcionando**: texto digitado no Pi
    aparece no Kindle, toque no Kindle interage de volta com o Pi. Vários bugs reais só visíveis
    em hardware real foram encontrados e corrigidos nesse processo — ver
@@ -133,8 +134,15 @@ Xrandr, não sessão espelhada).
 
 - `docs/findings/` — achados técnicos, um arquivo por problema/solução (mesmo padrão do
   projeto `kindle`).
-- `app/` — o cliente GTK do Kindle (`src/main.c`, módulo isolado `src/vnc_client.c`/`.h`,
-  `src/pixel_convert.c` testável, `tests/`, `meson.build`).
+- `app/` — o cliente GTK do Kindle (`tests/`, `meson.build`), organizado como Ports & Adapters
+  leve: `src/main.c` é só wiring (instancia os módulos abaixo e liga os callbacks, sem lógica
+  própria); `src/session.c`/`.h` é o núcleo — ciclo de vida da conexão (conectar, reconectar
+  sozinho a cada 2s, watch do fd), política de resize e envio de clique — e conhece GLib como
+  event loop, mas não GTK/GDK/Cairo; `src/ui.c`/`.h` é o adapter de apresentação (janela,
+  desenho, captura de toque) e não conhece VNC; `src/kindle_platform.c`/`.h` isola tudo que é
+  específico do device (screensaver via `lipc`, título mágico de janela do Awesome WM);
+  `src/vnc_client.c`/`.h` é o único módulo que fala com `libvncclient`; `src/pixel_convert.c`
+  é o módulo puro testável; `src/timing.h` tem os helpers de instrumentação de latência.
 - `cmake/` — toolchain file de CMake pro cross-compile do `libvncclient`.
 - `vendor/libvncserver` — submódulo git do `libvncclient` (LibVNC/libvncserver), pinado numa
   release estável.
