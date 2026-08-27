@@ -159,18 +159,47 @@ As três frentes de pesquisa terminaram, cada uma com decisões concretas regist
    generalização do self-match de `pgrep`/`pkill`) em
    [`kindle-hardware-test.md`](docs/findings/kindle-hardware-test.md); revisão da composição
    da sessão do Pi em [`pi-vnc-server.md`](docs/findings/pi-vnc-server.md). O item 5 da fila
-   (menu do app) ficou **parcialmente** feito — ver `docs/ideias-futuras.md`: ainda faltam
-   desconectar/conectar em outro IP com persistência e o toggle do teclado por gesto.
+   (menu do app) ficou **parcialmente** feito — ver `docs/ideias-futuras.md`: ainda falta
+   desconectar/conectar em outro IP com persistência (o toggle do teclado por gesto virou
+   botão dedicado na reestrutura de UI abaixo, item 8).
+
+8. ~~Reestrutura de UI: barra fixa, painel unificado, arrasto real, scroll ajustável,
+   proporção de tela~~ — **feito, revisado e VALIDADO no hardware pelo usuário** (sessão de
+   27/08, madrugada→manhã: cinco etapas implementadas, cross-compiladas, deployadas e
+   revisadas enquanto o usuário dormia, confirmadas funcionando por ele ao acordar — "está
+   tudo funcionando"). (1) Barra fixa no rodapé com 4 botões (Scroll ↑, Scroll ↓, Teclado,
+   Menu), sempre visível. (2) Teclado e menu viraram conteúdo mutuamente exclusivo de um
+   "painel" único (`PanelMode` em `ui.c`), alternado pelas 3 regras de toggle (nada
+   aberto→abre; outro aberto→troca; já aberto→fecha); `SetDesktopSize` é re-pedido a cada
+   abertura/fechamento (`session_set_target_size`). (3) A etapa mais arriscada: a página de
+   símbolos do teclado (`?123`) ganhou duas teclas, "Esquerdo" (sticky, arma clique
+   contínuo) e "Direito" (ação imediata), substituindo o espaço só ali (letras mantém
+   espaço normal) — exigiu rastreamento real de motion/release em `ui.c`
+   (`GDK_POINTER_MOTION_MASK` + `HINT` pro coalescing do GTK2, throttle de 8px), o arrasto
+   termina quando o dedo levanta da tela; `session_send_drag` sempre clampa coordenada em
+   vez de descartar, pra garantir que o release sempre chegue. O que o arrasto significa
+   (mover janela, redimensionar, selecionar texto) é decidido pelo Openbox/GTK do servidor,
+   sem desambiguação nossa. (4) Par "Scroll A-"/"Scroll A+" no menu ajusta quantas catracas
+   de roda cada toque manda (`session_get/set_scroll_lines`, puramente client-side, faixa
+   1-10). (5) `BAR_HEIGHT_PX` fixo (60px) virou `BAR_HEIGHT_PERCENT` (4% da altura + piso de
+   40px), com insets e bordas também proporcionais à altura local de cada linha/botão
+   (`proportional_inset`/`proportional_border_width` em `ui.c`) — garante que o app funcione
+   bem em Kindles de resolução diferente da testada. De carona, um bug real achado pelo
+   `reviewer`: `left_click_armed` vazava entre páginas/painéis sem indicador visual,
+   corrigido em dois pontos (`keyboard.c`, `ui.c`) com teste de regressão novo. Suíte
+   `test_keyboard.c` tem agora 14 casos. Commits `e6de59e` (implementação) e `050b189`
+   (confirmação de validação), ambos em `origin/main`. Detalhes técnicos completos dos itens
+   3, 4 e 5 da fila em [`docs/ideias-futuras.md`](docs/ideias-futuras.md).
 
 ## Ideias futuras (não implementadas)
 
 A fila priorizada da **parte 2 da PoC** (definida em 26/08, ao fechar a parte 1) vive em
-[`docs/ideias-futuras.md`](docs/ideias-futuras.md): scroll, botão direito, o restante do
-menu do app (desconectar/conectar em outro IP, toggle do teclado por gesto), orientação
+[`docs/ideias-futuras.md`](docs/ideias-futuras.md). Dos itens originais, restam pendentes: o
+resto do menu do app (desconectar/conectar em outro IP com persistência), orientação
 paisagem — mais as duas exploratórias já anotadas antes (espelhar a sessão física do Pi e
-usar o Kindle como segundo monitor de verdade). Os itens 1 (teclado virtual) e 2 (GUI com
-editor de texto) já saíram da fila, e o item 5 (menu do app) ficou parcialmente feito — ver
-"Próximos passos" acima.
+usar o Kindle como segundo monitor de verdade). Os itens 1 (teclado virtual), 2 (GUI com
+editor de texto), 3 (scroll) e 4 (botão direito/arrasto) já saíram da fila; o item 5 (menu
+do app) ficou parcialmente feito — ver "Próximos passos" acima (itens 7 e 8).
 
 ## Estrutura do repositório
 
@@ -179,13 +208,15 @@ editor de texto) já saíram da fila, e o item 5 (menu do app) ficou parcialment
 - `app/` — o cliente GTK do Kindle (`tests/`, `meson.build`), organizado como Ports & Adapters
   leve: `src/main.c` é só wiring (instancia os módulos abaixo e liga os callbacks, sem lógica
   própria); `src/session.c`/`.h` é o núcleo — ciclo de vida da conexão (conectar, reconectar
-  sozinho a cada 2s, watch do fd), política de resize e envio de clique/tecla — e conhece GLib
-  como event loop, mas não GTK/GDK/Cairo; `src/ui.c`/`.h` é o adapter de apresentação (janela,
-  desenho, captura de toque, faixa do teclado virtual) e não conhece VNC;
-  `src/kindle_platform.c`/`.h` isola tudo que é específico do device (screensaver via `lipc`,
-  título mágico de janela do Awesome WM); `src/vnc_client.c`/`.h` é o único módulo que fala com
-  `libvncclient`; `src/keyboard.c`/`.h` é o módulo puro do teclado virtual (layout, hit-test,
-  sticky Shift/Ctrl — zero GTK, zero VNC, com `app/tests/test_keyboard.c`);
+  sozinho a cada 2s, watch do fd), política de resize e envio de clique/tecla/scroll/arrasto
+  (clique direito) — e conhece GLib como event loop, mas não GTK/GDK/Cairo; `src/ui.c`/`.h` é
+  o adapter de apresentação (janela, desenho, captura de toque, barra fixa do rodapé, painel
+  unificado de teclado/menu — `PanelMode` — e rastreamento de motion/release do arrasto) e
+  não conhece VNC; `src/kindle_platform.c`/`.h` isola tudo que é específico do device
+  (screensaver via `lipc`, título mágico de janela do Awesome WM); `src/vnc_client.c`/`.h` é
+  o único módulo que fala com `libvncclient`; `src/keyboard.c`/`.h` é o módulo puro do
+  teclado virtual (layout, hit-test, sticky Shift/Ctrl, teclas Esquerdo/Direito da página de
+  símbolos — zero GTK, zero VNC, com `app/tests/test_keyboard.c`);
   `src/remote_control.c`/`.h` é o cliente TCP do `kindow-helperd` (`pi/kindow-helperd`) — o
   canal lateral de comando pro zoom remoto, que o protocolo RFB não cobre; chamado só do
   wiring (`main.c`), em resposta às ações da página de menu do teclado, sem GTK/VNC também;
