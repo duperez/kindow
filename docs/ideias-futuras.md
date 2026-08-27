@@ -6,6 +6,17 @@ partida pra sessões futuras, não um registro do que já foi decidido.
 
 ## Fila da parte 2 da PoC (ordenada em 26/08)
 
+**Nota sobre a sessão de 27/08 (noite)**: os itens 3, 4 e 5 (scroll ajustável, clique
+esquerdo/direito, proporção de tela) foram implementados numa sessão em que o usuário foi
+dormir e pediu pra eu avançar sozinho. Cross-compilado, deployado no device, confirmado
+que conecta e roda sem crash/warning — o máximo verificável sem alguém tocando a tela
+física (regra do projeto: nunca alegar verificação visual sem os olhos do usuário). O
+item 4 em particular (arrasto/clique contínuo) é a peça mais arriscada de toda a
+reestrutura de UI — primeira vez que o app rastreia movimento contínuo, com premissas
+genuinamente não testadas (ver a seção de honestidade dentro do item 4). Tratar como
+"implementado, aguardando validação humana", não como "feito" no mesmo sentido dos itens
+anteriores desta fila.
+
 A parte 1 (provar que o Kindle funciona como tela interativa sem fio pro Pi) está fechada.
 Estes são os próximos itens, ordenados por **o que faz mais sentido agora** e, como critério
 de desempate, **o que é mais simples de fazer**:
@@ -43,50 +54,120 @@ de desempate, **o que é mais simples de fazer**:
    scroll/arrasto no cliente (mover titlebar exige press-move-release, mesmo mecanismo do
    swipe do item 3).
 
-3. **Scroll** — hoje não há como rolar conteúdo remoto a partir do Kindle. Em VNC, scroll
-   é "botão de roda": `SendPointerEvent` com os bits dos botões 4 (cima) / 5 (baixo) — o
-   mecanismo de envio já existe, o trabalho é o gesto. Idealmente **swipe** na área do
-   frame (arrastar pra cima/baixo), com fallback de **botões** dedicados se o gesto não
-   funcionar bem. Atenção de design pro e-ink: swipe contínuo tipo celular geraria
-   tempestade de refresh — melhor gesto discreto (um swipe = N linhas de roda), na mesma
-   filosofia do "clique discreto" atual. Também exige separar toque-que-é-clique de
-   toque-que-é-arrasto no `ui` (threshold de movimento), o que de quebra prepara o terreno
-   pro toque longo do botão direito.
+3. **Scroll** — **feito, parcial (27/08)**. Saiu diferente do que este item previa: em
+   vez de swipe no conteúdo, virou dois botões dedicados (↑/↓) numa barra fixa nova no
+   rodapé da tela — decisão tomada numa discussão de desenho sobre ambiguidade de
+   gestos (scroll por swipe no conteúdo colidiria com seleção de texto por arrasto, mesmo
+   gesto físico disputando a mesma área; ver histórico da sessão de 27/08 e o item de
+   Menu abaixo, que a mesma discussão remodelou). `SendPointerEvent` com os bits dos
+   botões 4/5, na última posição tocada no conteúdo (`session_send_scroll`,
+   `last_touch_x/y` em `session.c`) — um toque = uma "catraca" de roda.
 
-4. **Botão direito** — um toque longo (segurar o dedo) vira clique direito
-   (`button_mask` com o bit do botão 3, no mesmo `SendPointerEvent` que já existe). Quase
-   todo o trabalho é client-side e pequeno: detecção de toque longo no `ui.c` + um
-   `session_send_right_click`. É o item mais simples da fila, mas ficou **depois da GUI**
-   de propósito (revisão de 26/08): no `xterm` puro o botão direito não faz nada de útil
-   (só estende seleção) — só passa a valer a pena quando existir uma GUI onde clique
-   direito significa alguma coisa.
+   **Etapa 4 da reestrutura de UI — implementada (27/08), pendente validação em
+   hardware**: usuário ajusta quantas catracas cada toque manda, por um par -/+ no menu
+   ("Scroll A-"/"Scroll A+"). Puramente client-side (diferente do zoom, não passa pelo
+   `kindow-helperd`/Pi) — `session_get/set_scroll_lines` guardam o valor (default 1,
+   faixa 1-10), `session_send_scroll` manda N pares press+release em vez de sempre 1.
+   Compilado, cross-compilado, deployado — não validado no hardware ainda (sessão
+   noturna sem o usuário presente, ver nota no topo do arquivo).
 
-5. **Menu do app** — **parcialmente feito (26/08)**. Saiu diferente do que este item
-   previa: em vez de overlay/gesto, virou uma terceira página do teclado virtual (chord
-   Ctrl+Shift + tecla de página, rótulo "Menu" quando arma — ver "Próximos passos" no
-   README). **Sair da aplicação** ✓ feito (hoje só via SSH deixou de ser verdade). **Mudar
-   tamanho de fonte** ✓ feito, e foi além do pedido original: virou zoom remoto em três
-   camadas independentes (Apps/Janela/Painel), não só uma fonte única — ver
-   `pi/kindow-helperd`. A sub-questão que este item deixava em aberto ("tamanho de fonte
-   hoje é configuração do `xterm` no servidor, mudar do cliente exige mecanismo próprio")
-   está **respondida**: o mecanismo é o `kindow-helperd`, um canal de comando TCP lateral
-   que o RFB não cobre.
+4. **Botão direito** — **implementado (27/08), pendente validação em hardware**. O
+   desenho original (toque longo) foi revisto durante a reestrutura de UI da
+   barra/teclado, numa troca de mensagens com o usuário antes de dormir: o timing de
+   toque longo nunca chegou a ser validado no hardware, e o padrão que vinha se firmando
+   na sessão (botão explícito vence gesto/timing — mesma razão por trás do zoom, do
+   scroll acima, e do toggle de painel abaixo) apontou pra uma alternativa mais simples e
+   mais confiável — mas o usuário corrigiu a primeira tentativa de desenho (colocar os
+   botões na barra fixa): a intenção real dele era a página de SÍMBOLOS do teclado
+   (`?123`) ganhar dois botões substituindo só o espaço ALI, mantendo o espaço normal na
+   página de letras (o caso comum de digitação continua intocado). Implementado assim:
+   `KEY_LEFT_CLICK`/`KEY_RIGHT_CLICK` em `keyboard.c`, teclas "Esquerdo" (sticky: arma
+   "clique contínuo" — consultável de fora via `keyboard_left_click_armed`, consumido
+   via `keyboard_consume_left_click_arm` quando o toque que usa o arme acontece no
+   FRAME, uma área que `keyboard.c` não enxerga) e "Direito" (ação imediata, reporta via
+   out-param de `keyboard_handle_tap`, mesma convenção do scroll quanto a alvo — última
+   posição tocada). O arrasto em si: `ui.c` ganhou rastreamento de motion/release
+   (`GDK_POINTER_MOTION_MASK` + `GDK_POINTER_MOTION_HINT_MASK` pro coalescing padrão do
+   GTK2, mais um throttle por distância mínima de 8px não validado/medido), termina
+   quando o dedo LEVANTA da tela (sem precisar apertar de novo). `session_send_drag`
+   sempre CLAMPA coordenada fora dos limites em vez de descartar (diferente do clique) —
+   um arrasto em andamento precisa terminar com release de verdade, ou o botão fica
+   preso pressionado do lado do servidor. O que o arrasto significa (mover janela,
+   redimensionar, selecionar texto) é decidido pelo servidor (Openbox/GTK) pela posição
+   onde começou — nenhuma desambiguação nossa.
 
-   **Ainda pendente** (o que sobrou do item original): desconectar do Pi e conectar em
-   outro (pedindo IP/porta e demais dados necessários), lembrando os dados da última
-   sessão (persistência local em `/mnt/us/kindow/`); e, como opção configurável,
-   **mostrar/esconder o teclado virtual por gesto** (decisão de 26/08: o teclado nasceu
-   como faixa fixa reservada — melhor pro e-ink, zero refresh extra —, mas a variante
-   overlay/toggle fica como escolha futura do usuário via este menu, não como substituição
-   da faixa fixa).
+   **Honestidade sobre o que NÃO foi validado** (implementado numa sessão sem o usuário
+   presente pra testar na tela física — ver nota no topo do arquivo): (a) se o Openbox
+   realmente move/redimensiona janela a partir de eventos de motion sintetizados via
+   VNC — nunca testado neste projeto; (b) se esse touchscreen específico rastreia
+   contato contínuo de forma confiável (capacitivo/resistivo/infravermelho — não
+   confirmado); (c) se o throttle de 8px é suficiente pra evitar tempestade de refresh
+   no e-ink durante um arrasto real. Testes unitários novos em `test_keyboard.c` cobrem
+   a LÓGICA de `keyboard.c` (Esquerdo só na página de símbolos, toggle, consumo externo,
+   Direito reportando sem armar nada) — mas não substituem o teste no device, que só
+   valida protocolo/hit-test, não a experiência física do arrasto.
+
+   **Achado real de review corrigido antes do commit**: `left_click_armed` vazava entre
+   páginas/painéis — armar "Esquerdo" na página de símbolos e depois trocar de página
+   (via "abc") ou de painel (Teclado↔Menu na barra) deixava o arme vivo **sem indicador
+   visual nenhum** (a tecla some junto com a página/painel), fazendo o próximo arrasto
+   no frame disparar sem o usuário perceber. Corrigido em dois pontos — `case KEY_PAGE:`
+   em `keyboard.c` (troca de letras↔símbolos) e `toggle_panel` em `ui.c` (troca de
+   painel) — ambos agora desarmam explicitamente via `keyboard_consume_left_click_arm`,
+   idempotente quando já desarmado. Novo teste
+   `test_left_click_arm_cleared_by_page_switch` cobre o caminho de `keyboard.c`; o de
+   `ui.c` (troca de painel) só é verificável no device, já que `ui.c` não é módulo puro
+   testável.
+
+5. **Menu do app** — **feito (27/08, revisado de novo)**. A forma de acessar mudou uma
+   segunda vez desde a primeira revisão (26/08, chord Ctrl+Shift + página do teclado):
+   virou conteúdo próprio, mutuamente exclusivo com o teclado, dentro de um "painel" que
+   ocupa a mesma área da tela — alternado por um botão dedicado "Menu" na barra fixa do
+   rodapé (junto de "Teclado" e scroll ↑/↓), com as 3 regras de toggle já implementadas:
+   nada aberto → abre o tocado; o outro aberto → troca; o próprio já aberto → fecha (ver
+   `PanelMode`/`MenuAction` em `ui.c`). **Sair da aplicação** ✓, **zoom em 3 camadas
+   independentes** ✓ (sem mudança nessa parte, ver `pi/kindow-helperd`).
+
+   **Mostrar/esconder o teclado** ✓ feito também (27/08) — mas não por gesto como esse
+   item previa: virou o botão "Teclado" da mesma barra, no mesmo state machine do menu
+   (mais confiável que gesto, mesmo padrão da sessão). `SetDesktopSize` é re-pedido a
+   cada abertura/fechamento do painel (`session_set_target_size`), então a área do frame
+   realmente cresce/encolhe, não só o desenho.
+
+   **Ainda pendente**: desconectar do Pi e conectar em outro (pedindo IP/porta e demais
+   dados necessários), lembrando os dados da última sessão (persistência local em
+   `/mnt/us/kindow/`).
+
+   **Etapa 5 da reestrutura de UI — implementada (27/08)**: `BAR_HEIGHT_PX` (60px fixos)
+   virou `BAR_HEIGHT_PERCENT` (4% da altura da tela, com piso de 40px pra telas
+   hipotéticas muito baixas) — reproduz ~57px no device testado (1072×1448), perto do
+   valor original. Insets entre teclas/botões/itens de menu e largura de borda também
+   viraram proporcionais (`proportional_inset`/`proportional_border_width` em `ui.c`,
+   calculados a partir da altura LOCAL de cada linha/botão, não da tela inteira — mantém
+   o mesmo peso visual relativo em qualquer resolução). Validado o que dá pra validar
+   sem tela física: a fórmula bateu exatamente com o esperado no log do device
+   (`keyboard_top=904`, conferido à mão contra a conta:
+   `screen_height=1448 → bar_height=max(1448*4/100, 40)=57 → bar_top=1391 →
+   keyboard_top=1391*65/100=904`) — mas o RESULTADO VISUAL (as bordas/gaps parecem
+   proporcionalmente certos?) ainda depende do usuário olhar a tela.
+
+   **Fora do escopo desta etapa, por já estar resolvido**: a área do frame (tela do Pi)
+   não precisa de conversão nenhuma — ela nunca foi pixel fixo. `ui_frame_width/height`
+   pedem ao servidor, via `SetDesktopSize`, exatamente a resolução real detectada em
+   runtime (menos o que bar/painel reservam), e o frame que chega é desenhado 1:1
+   (`ui_show_frame`, sem escala/distorção) — por construção nunca sobra espaço em branco
+   ao redor dele, em nenhum Kindle. O que a etapa 5 muda é só a PROPORÇÃO de quanto do
+   total da tela sobra pro frame vs. bar/painel entre devices diferentes — não afeta a
+   correção do frame em si, que já está garantida desde a feature de resize automático
+   (ver `kindle-hardware-test.md`).
 
    **Sub-ideia registrada (26/08) — bootstrap do Pi pelo próprio Kindle**: no formulário
    de conexão deste menu, oferecer um checkbox "instalar e iniciar o serviço no Pi": o
    usuário informa IP + usuário + senha, o app abre um SSH pro Pi, verifica se o
    `kindow-helperd` existe, envia os arquivos (de um diretório temporário), inicia o
    serviço, testa e só então conecta — onboarding de um Pi virgem sem tocar em terminal.
-   Pré-requisitos técnicos anotados: (a) roteamento de input local — parcialmente resolvido
-   pelo mecanismo `KEY_ACTION`/`KeyboardAction` que a página de menu já usa (callback
+   Pré-requisitos técnicos anotados: (a) roteamento de input local — parcialmente
+   resolvido pelo mecanismo `MenuAction` que o painel de menu já usa (callback
    `ui`→`main`, nunca vai pro servidor), mas isso cobre botões de ação fixos, não um
    formulário de texto livre pra digitar IP/usuário/senha, que ainda não existe; (b) SSH a
    partir do Kindle (o jailbreak traz dropbear/`dbclient`, mas automatizar senha exige

@@ -17,17 +17,6 @@
 
 #include "keyboard.h"
 
-/* A assinatura de keyboard_handle_tap ganhou o out-param de ação (página de menu,
- * 26/08). Os casos abaixo são anteriores ao menu e só olham eventos/visual — este
- * wrapper absorve o parâmetro novo e ainda garante o contrato "eventos e ação nunca
- * vêm juntos no mesmo toque". Casos específicos do menu chamam a função real. */
-static int tap(Keyboard *keyboard, int x, int y, KeyboardEvent *events, bool *visual) {
-    KeyboardAction action = KEYBOARD_ACTION_NONE;
-    int n = keyboard_handle_tap(keyboard, x, y, events, &action, visual);
-    assert(!(n > 0 && action != KEYBOARD_ACTION_NONE));
-    return n;
-}
-
 /* Keysyms X11 usados nas asserções — espelham as constantes internas de keyboard.c.
  * Não incluímos keyboard.c aqui de propósito: o teste deve validar o CONTRATO público
  * (quais keysyms saem pra cada tecla), não depender dos nomes internos do módulo. */
@@ -68,41 +57,6 @@ static void center_of_index(const Keyboard *keyboard, int index, int *out_x, int
     KeyboardKeyView view = keyboard_key_view(keyboard, index);
     *out_x = view.x + view.w / 2;
     *out_y = view.y + view.h / 2;
-}
-
-/* Igual a find_key_index_by_label, mas devolve -1 em vez de sair do processo quando o
- * rótulo não existe na página atual — usada pra AFIRMAR ausência (ex.: "Voltar ao
- * teclado" não deve existir fora da página de menu), onde sumir é o resultado esperado,
- * não uma falha de teste. */
-static int find_key_index_by_label_opt(const Keyboard *keyboard, const char *label) {
-    int count = keyboard_key_count(keyboard);
-    for (int i = 0; i < count; i++) {
-        if (strcmp(keyboard_key_view(keyboard, i).label, label) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-/* Entra na página de menu do jeito "normal": arma Shift, arma Ctrl, toca na tecla de
- * página (que nesse estado mostra "Menu" e consome os dois modificadores). Usado pelos
- * testes que só precisam CHEGAR na página de menu pra testar outra coisa — o mecanismo
- * do chord em si (rótulo "Menu", consumo dos modificadores) é coberto à parte em
- * test_menu_chord_opens_menu_and_consumes_modifiers. */
-static void enter_menu_page(Keyboard *keyboard) {
-    int shift_index = find_key_index_by_label(keyboard, "Shift");
-    int ctrl_index = find_key_index_by_label(keyboard, "Ctrl");
-    int page_index = find_key_index_by_label(keyboard, "?123");
-    int sx, sy, cx, cy, px, py;
-    center_of_index(keyboard, shift_index, &sx, &sy);
-    center_of_index(keyboard, ctrl_index, &cx, &cy);
-    center_of_index(keyboard, page_index, &px, &py);
-
-    KeyboardEvent events[KEYBOARD_MAX_EVENTS];
-    bool visual_changed = false;
-    tap(keyboard, sx, sy, events, &visual_changed);
-    tap(keyboard, cx, cy, events, &visual_changed);
-    tap(keyboard, px, py, events, &visual_changed); /* consome o chord, abre PAGE_MENU */
 }
 
 /* Geometria: cada fileira cobre a largura inteira (primeira tecla da primeira fileira
@@ -159,8 +113,9 @@ static void test_tap_on_known_key_generates_down_up_pair(void) {
     center_of_index(keyboard, q_index, &x, &y);
 
     KeyboardEvent events[KEYBOARD_MAX_EVENTS];
+    bool right_click;
     bool visual_changed = true; /* valor de sentinela, pra provar que a função escreve nele */
-    int n = tap(keyboard, x, y, events, &visual_changed);
+    int n = keyboard_handle_tap(keyboard, x, y, events, &right_click, &visual_changed);
 
     assert(n == 2);
     assert(events[0].keysym == 0x71u && events[0].down == true);  /* 'q' down */
@@ -178,14 +133,15 @@ static void test_tap_outside_any_key_returns_zero_events(void) {
 
     KeyboardEvent events[KEYBOARD_MAX_EVENTS];
     bool visual_changed = true;
+    bool right_click;
 
-    int n = tap(keyboard, -5, -5, events, &visual_changed);
+    int n = keyboard_handle_tap(keyboard, -5, -5, events, &right_click, &visual_changed);
     assert(n == 0);
     assert(visual_changed == false);
 
     visual_changed = true;
-    n = tap(keyboard, KB_TEST_WIDTH + 50, KB_TEST_HEIGHT + 50, events,
-                            &visual_changed);
+    n = keyboard_handle_tap(keyboard, KB_TEST_WIDTH + 50, KB_TEST_HEIGHT + 50, events,
+                            &right_click, &visual_changed);
     assert(n == 0);
     assert(visual_changed == false);
 
@@ -209,9 +165,10 @@ static void test_sticky_shift_uppercases_next_letter_then_disarms(void) {
 
     KeyboardEvent events[KEYBOARD_MAX_EVENTS];
     bool visual_changed = false;
+    bool right_click;
 
     /* toque no Shift: nenhum evento pro servidor, mas pede redraw */
-    int n = tap(keyboard, sx, sy, events, &visual_changed);
+    int n = keyboard_handle_tap(keyboard, sx, sy, events, &right_click, &visual_changed);
     assert(n == 0);
     assert(visual_changed == true);
 
@@ -222,7 +179,7 @@ static void test_sticky_shift_uppercases_next_letter_then_disarms(void) {
 
     /* toque na letra: sai maiúsculo, e o toque consome o Shift armado */
     visual_changed = false;
-    n = tap(keyboard, qx, qy, events, &visual_changed);
+    n = keyboard_handle_tap(keyboard, qx, qy, events, &right_click, &visual_changed);
     assert(n == 2);
     assert(events[0].keysym == 0x51u && events[0].down == true);  /* 'Q' down */
     assert(events[1].keysym == 0x51u && events[1].down == false); /* 'Q' up */
@@ -235,7 +192,7 @@ static void test_sticky_shift_uppercases_next_letter_then_disarms(void) {
     /* próximo toque na mesma tecla volta a sair minúsculo — prova que Shift não ficou
      * "preso" armado */
     visual_changed = true;
-    n = tap(keyboard, qx, qy, events, &visual_changed);
+    n = keyboard_handle_tap(keyboard, qx, qy, events, &right_click, &visual_changed);
     assert(n == 2);
     assert(events[0].keysym == 0x71u && events[0].down == true); /* 'q' minúsculo de novo */
     assert(visual_changed == false);
@@ -260,14 +217,15 @@ static void test_sticky_ctrl_wraps_control_l_around_letter(void) {
 
     KeyboardEvent events[KEYBOARD_MAX_EVENTS];
     bool visual_changed = false;
+    bool right_click;
 
-    int n = tap(keyboard, ctrl_x, ctrl_y, events, &visual_changed);
+    int n = keyboard_handle_tap(keyboard, ctrl_x, ctrl_y, events, &right_click, &visual_changed);
     assert(n == 0);
     assert(visual_changed == true);
     assert(keyboard_key_view(keyboard, ctrl_index).highlighted == true);
 
     visual_changed = false;
-    n = tap(keyboard, cx, cy, events, &visual_changed);
+    n = keyboard_handle_tap(keyboard, cx, cy, events, &right_click, &visual_changed);
     assert(n == 4);
     assert(events[0].keysym == KS_CONTROL_L && events[0].down == true);
     assert(events[1].keysym == 0x63u && events[1].down == true);  /* 'c' down */
@@ -278,7 +236,7 @@ static void test_sticky_ctrl_wraps_control_l_around_letter(void) {
 
     /* Ctrl desarmado: próximo toque na mesma letra sai "normal", sem Control_L em volta */
     visual_changed = true;
-    n = tap(keyboard, cx, cy, events, &visual_changed);
+    n = keyboard_handle_tap(keyboard, cx, cy, events, &right_click, &visual_changed);
     assert(n == 2);
     assert(events[0].keysym == 0x63u && events[0].down == true);
     assert(events[1].keysym == 0x63u && events[1].down == false);
@@ -303,14 +261,15 @@ static void test_ctrl_and_shift_together_wrap_uppercase_letter(void) {
 
     KeyboardEvent events[KEYBOARD_MAX_EVENTS];
     bool visual_changed = false;
+    bool right_click;
 
-    tap(keyboard, sx, sy, events, &visual_changed);
-    tap(keyboard, ctrl_x, ctrl_y, events, &visual_changed);
+    keyboard_handle_tap(keyboard, sx, sy, events, &right_click, &visual_changed);
+    keyboard_handle_tap(keyboard, ctrl_x, ctrl_y, events, &right_click, &visual_changed);
     assert(keyboard_key_view(keyboard, shift_index).highlighted == true);
     assert(keyboard_key_view(keyboard, ctrl_index).highlighted == true);
 
     visual_changed = false;
-    int n = tap(keyboard, cx, cy, events, &visual_changed);
+    int n = keyboard_handle_tap(keyboard, cx, cy, events, &right_click, &visual_changed);
     assert(n == 4);
     assert(events[0].keysym == KS_CONTROL_L && events[0].down == true);
     assert(events[1].keysym == 0x43u && events[1].down == true);  /* 'C' maiúsculo down */
@@ -346,8 +305,9 @@ static void test_page_switch_changes_keys_at_same_position(void) {
 
     KeyboardEvent events[KEYBOARD_MAX_EVENTS];
     bool visual_changed = false;
+    bool right_click;
 
-    int n = tap(keyboard, px, py, events, &visual_changed);
+    int n = keyboard_handle_tap(keyboard, px, py, events, &right_click, &visual_changed);
     assert(n == 0);
     assert(visual_changed == true);
 
@@ -356,7 +316,7 @@ static void test_page_switch_changes_keys_at_same_position(void) {
 
     /* mesma posição de tela que antes era 'q', agora na página de símbolos */
     visual_changed = false;
-    n = tap(keyboard, qx, qy, events, &visual_changed);
+    n = keyboard_handle_tap(keyboard, qx, qy, events, &right_click, &visual_changed);
     assert(n == 2);
     assert(events[0].keysym == 0x21u && events[0].down == true);  /* '!' down */
     assert(events[1].keysym == 0x21u && events[1].down == false); /* '!' up */
@@ -367,7 +327,7 @@ static void test_page_switch_changes_keys_at_same_position(void) {
     center_of_index(keyboard, abc_index, &ax, &ay);
 
     visual_changed = false;
-    n = tap(keyboard, ax, ay, events, &visual_changed);
+    n = keyboard_handle_tap(keyboard, ax, ay, events, &right_click, &visual_changed);
     assert(n == 0);
     assert(visual_changed == true);
     assert(keyboard_key_count(keyboard) == letters_count);
@@ -396,7 +356,8 @@ static void test_special_keys_send_expected_keysyms(void) {
 
         KeyboardEvent events[KEYBOARD_MAX_EVENTS];
         bool visual_changed = true;
-        int n = tap(keyboard, x, y, events, &visual_changed);
+        bool right_click;
+        int n = keyboard_handle_tap(keyboard, x, y, events, &right_click, &visual_changed);
 
         assert(n == 2);
         assert(events[0].keysym == cases[i].keysym && events[0].down == true);
@@ -423,204 +384,19 @@ static void test_modifier_taps_never_produce_events(void) {
 
         KeyboardEvent events[KEYBOARD_MAX_EVENTS];
         bool visual_changed = false;
-        int n = tap(keyboard, x, y, events, &visual_changed);
+        bool right_click;
+        int n = keyboard_handle_tap(keyboard, x, y, events, &right_click, &visual_changed);
         assert(n == 0);
     }
 
     keyboard_destroy(keyboard);
 }
 
-/* Chord do menu (Ctrl+Shift armados + toque na tecla de página): abre a página de menu
- * e consome os dois modificadores no mesmo toque — diferente da troca de página normal,
- * que não mexe em Shift/Ctrl. O rótulo da tecla de página já reflete o chord disponível
- * ANTES do toque ("Menu" em vez de "?123", com destaque), mesma engrenagem do rótulo
- * dinâmico do Shift. Chama keyboard_handle_tap direto (não o wrapper tap()) porque o
- * caso central deste teste é justamente checar out_action == NONE explicitamente. */
-static void test_menu_chord_opens_menu_and_consumes_modifiers(void) {
-    Keyboard *keyboard = keyboard_create(KB_TEST_WIDTH, KB_TEST_HEIGHT);
-    assert(keyboard != NULL);
-
-    int letters_count = keyboard_key_count(keyboard);
-    int page_index = find_key_index_by_label(keyboard, "?123");
-    int px, py;
-    center_of_index(keyboard, page_index, &px, &py); /* geometria não muda com modificador */
-
-    int shift_index = find_key_index_by_label(keyboard, "Shift");
-    int ctrl_index = find_key_index_by_label(keyboard, "Ctrl");
-    int sx, sy, cx, cy;
-    center_of_index(keyboard, shift_index, &sx, &sy);
-    center_of_index(keyboard, ctrl_index, &cx, &cy);
-
-    KeyboardEvent events[KEYBOARD_MAX_EVENTS];
-    bool visual_changed = false;
-    tap(keyboard, sx, sy, events, &visual_changed);
-    tap(keyboard, cx, cy, events, &visual_changed);
-
-    /* com os dois armados, a tecla de página vira a porta do menu: rótulo "Menu" e
-     * destaque, mesmo antes de ser tocada */
-    KeyboardKeyView page_view = keyboard_key_view(keyboard, page_index);
-    assert(strcmp(page_view.label, "Menu") == 0);
-    assert(page_view.highlighted == true);
-
-    KeyboardAction action = KEYBOARD_ACTION_NONE;
-    visual_changed = false;
-    int n = keyboard_handle_tap(keyboard, px, py, events, &action, &visual_changed);
-    assert(n == 0);
-    assert(action == KEYBOARD_ACTION_NONE);
-    assert(visual_changed == true);
-
-    /* página mudou: contagem de teclas diferente, e "Voltar ao teclado" passou a existir */
-    assert(keyboard_key_count(keyboard) != letters_count);
-    int back_index = find_key_index_by_label(keyboard, "Voltar ao teclado");
-    int bx, by;
-    center_of_index(keyboard, back_index, &bx, &by);
-
-    /* os dois modificadores foram consumidos pelo chord: voltando pro teclado, "q" sai
-     * minúsculo (Shift consumido) e sem Control_L em volta (Ctrl consumido) */
-    visual_changed = false;
-    n = tap(keyboard, bx, by, events, &visual_changed);
-    assert(n == 0);
-    assert(visual_changed == true);
-    assert(keyboard_key_count(keyboard) == letters_count);
-
-    int q_index = find_key_index_by_label(keyboard, "q");
-    int qx, qy;
-    center_of_index(keyboard, q_index, &qx, &qy);
-    visual_changed = true;
-    n = tap(keyboard, qx, qy, events, &visual_changed);
-    assert(n == 2);
-    assert(events[0].keysym == 0x71u && events[0].down == true); /* 'q' minúsculo */
-    assert(events[1].keysym == 0x71u && events[1].down == false);
-    assert(visual_changed == false); /* nenhum modificador sobrou pra desarmar */
-
-    keyboard_destroy(keyboard);
-}
-
-/* Sem os dois modificadores armados JUNTOS, a tecla de página sempre alterna
- * letras<->símbolos — nunca abre o menu. Cobre os dois jeitos de "sem chord": só Shift
- * armado, e nenhum modificador armado (o caso mais comum, já que a maioria dos toques
- * na tecla de página é troca de página de verdade). */
-static void test_page_toggle_without_chord_never_opens_menu(void) {
-    /* caso 1: só Shift armado (sem Ctrl) */
-    Keyboard *keyboard = keyboard_create(KB_TEST_WIDTH, KB_TEST_HEIGHT);
-    assert(keyboard != NULL);
-
-    int shift_index = find_key_index_by_label(keyboard, "Shift");
-    int sx, sy;
-    center_of_index(keyboard, shift_index, &sx, &sy);
-    int page_index = find_key_index_by_label(keyboard, "?123");
-    int px, py;
-    center_of_index(keyboard, page_index, &px, &py);
-
-    KeyboardEvent events[KEYBOARD_MAX_EVENTS];
-    bool visual_changed = false;
-    tap(keyboard, sx, sy, events, &visual_changed); /* arma só Shift */
-
-    /* sem Ctrl também armado, a tecla de página continua "?123", nunca "Menu" */
-    assert(strcmp(keyboard_key_view(keyboard, page_index).label, "?123") == 0);
-
-    visual_changed = false;
-    int n = tap(keyboard, px, py, events, &visual_changed);
-    assert(n == 0);
-    assert(visual_changed == true);
-    /* foi troca de página normal: "Voltar ao teclado" não existe na página resultante */
-    assert(find_key_index_by_label_opt(keyboard, "Voltar ao teclado") == -1);
-
-    keyboard_destroy(keyboard);
-
-    /* caso 2: nenhum modificador armado */
-    keyboard = keyboard_create(KB_TEST_WIDTH, KB_TEST_HEIGHT);
-    assert(keyboard != NULL);
-    page_index = find_key_index_by_label(keyboard, "?123");
-    center_of_index(keyboard, page_index, &px, &py);
-
-    visual_changed = false;
-    n = tap(keyboard, px, py, events, &visual_changed);
-    assert(n == 0);
-    assert(visual_changed == true);
-    assert(find_key_index_by_label_opt(keyboard, "Voltar ao teclado") == -1);
-
-    keyboard_destroy(keyboard);
-}
-
-/* Toques na página de menu, fora de "Voltar ao teclado": nunca produzem evento pro
- * servidor (contrato "eventos e ação nunca vêm juntos", checado explicitamente aqui via
- * n == 0 sempre que a ação não é NONE), só emitem a KeyboardAction correspondente — e
- * visual_changed fica false, já que a ação não muda nada visível no PRÓPRIO teclado
- * (quem reage à ação, redesenhando o que for, é o chamador em main.c/ui.c). Cobre os
- * seis rótulos de ação: os três pares A+/A- de zoom (independentes entre si), "Sair do
- * Kindow" e "Status da conexão (log)". */
-static void test_menu_actions_emit_expected_action_without_events(void) {
-    Keyboard *keyboard = keyboard_create(KB_TEST_WIDTH, KB_TEST_HEIGHT);
-    assert(keyboard != NULL);
-    enter_menu_page(keyboard);
-
-    struct {
-        const char *label;
-        KeyboardAction action;
-    } cases[] = {
-        {"Apps  A+", KEYBOARD_ACTION_ZOOM_APPS_IN},
-        {"Apps  A-", KEYBOARD_ACTION_ZOOM_APPS_OUT},
-        {"Janela  A+", KEYBOARD_ACTION_ZOOM_DECO_IN},
-        {"Janela  A-", KEYBOARD_ACTION_ZOOM_DECO_OUT},
-        {"Painel  A+", KEYBOARD_ACTION_ZOOM_PANEL_IN},
-        {"Painel  A-", KEYBOARD_ACTION_ZOOM_PANEL_OUT},
-        {"Sair do Kindow", KEYBOARD_ACTION_QUIT},
-        {"Status da conexão (log)", KEYBOARD_ACTION_STATUS},
-    };
-
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        int index = find_key_index_by_label(keyboard, cases[i].label);
-        int x, y;
-        center_of_index(keyboard, index, &x, &y);
-
-        KeyboardEvent events[KEYBOARD_MAX_EVENTS];
-        KeyboardAction action = KEYBOARD_ACTION_NONE;
-        bool visual_changed = true; /* sentinela: prova que a função escreve false nela */
-        int n = keyboard_handle_tap(keyboard, x, y, events, &action, &visual_changed);
-
-        assert(n == 0); /* contrato: eventos e ação nunca vêm juntos no mesmo toque */
-        assert(action == cases[i].action);
-        assert(visual_changed == false);
-    }
-
-    keyboard_destroy(keyboard);
-}
-
-/* "Voltar ao teclado": volta pra página de letras (rótulo "q" existe de novo, contagem
- * de teclas volta ao valor original), sem gerar evento nem ação, mas pedindo redraw
- * (página mudou). */
-static void test_menu_back_returns_to_letters_page(void) {
-    Keyboard *keyboard = keyboard_create(KB_TEST_WIDTH, KB_TEST_HEIGHT);
-    assert(keyboard != NULL);
-    int letters_count = keyboard_key_count(keyboard);
-
-    enter_menu_page(keyboard);
-    assert(keyboard_key_count(keyboard) != letters_count);
-
-    int back_index = find_key_index_by_label(keyboard, "Voltar ao teclado");
-    int bx, by;
-    center_of_index(keyboard, back_index, &bx, &by);
-
-    KeyboardEvent events[KEYBOARD_MAX_EVENTS];
-    KeyboardAction action = KEYBOARD_ACTION_NONE;
-    bool visual_changed = false;
-    int n = keyboard_handle_tap(keyboard, bx, by, events, &action, &visual_changed);
-
-    assert(n == 0);
-    assert(action == KEYBOARD_ACTION_NONE);
-    assert(visual_changed == true);
-    assert(keyboard_key_count(keyboard) == letters_count);
-    find_key_index_by_label(keyboard, "q"); /* existe de novo (sai do processo se não achar) */
-
-    keyboard_destroy(keyboard);
-}
-
 /* keyboard_key_index_at é a versão sem efeito colateral do hit-test: mesmo índice que
  * keyboard_handle_tap usaria pra tecla sob o toque, mas sem mudar estado nem gerar
- * evento/ação — e sempre relativo à página ATUAL, igual keyboard_key_view/count (a
- * mesma coordenada aponta pra teclas diferentes dependendo da página, como no teste de
- * troca de página acima). */
+ * evento — e sempre relativo à página ATUAL, igual keyboard_key_view/count (a mesma
+ * coordenada aponta pra teclas diferentes dependendo da página, como no teste de troca
+ * de página acima). */
 static void test_key_index_at_matches_label_lookup_and_handles_out_of_bounds(void) {
     Keyboard *keyboard = keyboard_create(KB_TEST_WIDTH, KB_TEST_HEIGHT);
     assert(keyboard != NULL);
@@ -637,51 +413,140 @@ static void test_key_index_at_matches_label_lookup_and_handles_out_of_bounds(voi
     assert(keyboard_key_index_at(keyboard, KB_TEST_WIDTH, 0) == -1);
     assert(keyboard_key_index_at(keyboard, 0, KB_TEST_HEIGHT) == -1);
 
-    /* na página de menu, a mesma consulta usa índice/geometria do menu — prova de que a
-     * consulta é relativa à página atual, não sempre à de letras */
-    enter_menu_page(keyboard);
-    int back_index = find_key_index_by_label(keyboard, "Voltar ao teclado");
-    int bx, by;
-    center_of_index(keyboard, back_index, &bx, &by);
-    assert(keyboard_key_index_at(keyboard, bx, by) == back_index);
+    keyboard_destroy(keyboard);
+}
+
+/* "Esquerdo"/"Direito" só existem na página de símbolos, substituindo o espaço só ali —
+ * nas letras o espaço continua normal (decisão do usuário, 27/08: ?123 já é modo
+ * explícito, então não custa reaproveitar; digitar espaço no dia a dia continua
+ * funcionando na página comum). */
+static void test_left_right_click_keys_only_on_symbols_page(void) {
+    Keyboard *keyboard = keyboard_create(KB_TEST_WIDTH, KB_TEST_HEIGHT);
+    assert(keyboard != NULL);
+
+    /* letras: espaço existe (rótulo vazio, achado por não ser nenhum dos outros — usamos
+     * keyboard_key_count como prova indireta de que Esquerdo/Direito não estão aqui) */
+    int count = keyboard_key_count(keyboard);
+    for (int i = 0; i < count; i++) {
+        const char *label = keyboard_key_view(keyboard, i).label;
+        assert(strcmp(label, "Esquerdo") != 0);
+        assert(strcmp(label, "Direito") != 0);
+    }
+
+    /* símbolos: aparecem os dois, espaço não existe mais */
+    KeyboardEvent events[KEYBOARD_MAX_EVENTS];
+    bool right_click = false;
+    bool visual_changed = false;
+    int page_index = find_key_index_by_label(keyboard, "?123");
+    int px, py;
+    center_of_index(keyboard, page_index, &px, &py);
+    keyboard_handle_tap(keyboard, px, py, events, &right_click, &visual_changed);
+
+    find_key_index_by_label(keyboard, "Esquerdo"); /* sai do processo se não achar */
+    find_key_index_by_label(keyboard, "Direito");
 
     keyboard_destroy(keyboard);
 }
 
-/* O chord Ctrl+Shift também abre o menu a partir da página de SÍMBOLOS — comportamento
- * intencional (a tecla "abc" é KEY_PAGE igual à "?123", e o chord vale pra qualquer
- * tecla de página fora do menu). O caminho real exercitado: a página de símbolos não
- * tem tecla Shift, mas o Shift armado SOBREVIVE à troca de página (só o chord ou uma
- * tecla normal consomem) — então arma-se Shift nas letras, troca-se de página, e o Ctrl
- * de lá completa o chord. Gap apontado em review de teste, fechado aqui. */
-static void test_menu_chord_works_from_symbols_page(void) {
+/* Sticky "Esquerdo": tocar arma (0 eventos, sem right_click, pede redraw, tecla fica
+ * destacada) e o estado é consultável/consumível de fora (keyboard_left_click_armed) —
+ * é assim que o ui.c vai saber, no toque seguinte no FRAME (fora da grade do teclado),
+ * que deve iniciar um arrasto em vez de um clique normal. Tocar de novo desarma (mesmo
+ * padrão toggle de Shift/Ctrl). */
+static void test_left_click_key_arms_and_toggles(void) {
     Keyboard *keyboard = keyboard_create(KB_TEST_WIDTH, KB_TEST_HEIGHT);
     assert(keyboard != NULL);
 
     KeyboardEvent events[KEYBOARD_MAX_EVENTS];
+    bool right_click = true;   /* sentinela: prova que a função escreve false */
+    bool visual_changed = false;
+    int page_index = find_key_index_by_label(keyboard, "?123");
+    int px, py;
+    center_of_index(keyboard, page_index, &px, &py);
+    keyboard_handle_tap(keyboard, px, py, events, &right_click, &visual_changed);
+    assert(keyboard_left_click_armed(keyboard) == false); /* ainda não tocou Esquerdo */
+
+    int left_index = find_key_index_by_label(keyboard, "Esquerdo");
+    int lx, ly;
+    center_of_index(keyboard, left_index, &lx, &ly);
+
+    right_click = true;
+    visual_changed = false;
+    int n = keyboard_handle_tap(keyboard, lx, ly, events, &right_click, &visual_changed);
+    assert(n == 0);
+    assert(right_click == false);
+    assert(visual_changed == true);
+    assert(keyboard_left_click_armed(keyboard) == true);
+    assert(keyboard_key_view(keyboard, left_index).highlighted == true);
+
+    /* consumo externo (simula o ui.c usando o arme num toque no frame) */
+    keyboard_consume_left_click_arm(keyboard);
+    assert(keyboard_left_click_armed(keyboard) == false);
+    assert(keyboard_key_view(keyboard, left_index).highlighted == false);
+
+    /* toggle: tocar Esquerdo de novo arma; tocar uma TERCEIRA vez desarma sem precisar
+     * de consumo externo */
+    keyboard_handle_tap(keyboard, lx, ly, events, &right_click, &visual_changed);
+    assert(keyboard_left_click_armed(keyboard) == true);
+    keyboard_handle_tap(keyboard, lx, ly, events, &right_click, &visual_changed);
+    assert(keyboard_left_click_armed(keyboard) == false);
+
+    keyboard_destroy(keyboard);
+}
+
+/* Achado de review (27/08): armar "Esquerdo" e trocar de página (via "abc", voltando pra
+ * letras) tem que desarmar — sem isso, o arme ficaria vivo sem NENHUM indicador visual
+ * (a tecla que mostrava o destaque desapareceu junto com a página de símbolos), e o
+ * próximo arrasto no frame dispararia sem o usuário saber. */
+static void test_left_click_arm_cleared_by_page_switch(void) {
+    Keyboard *keyboard = keyboard_create(KB_TEST_WIDTH, KB_TEST_HEIGHT);
+    assert(keyboard != NULL);
+
+    KeyboardEvent events[KEYBOARD_MAX_EVENTS];
+    bool right_click = false;
     bool visual_changed = false;
     int x, y;
 
-    /* letras: arma só o Shift e troca de página — sem o chord completo, "?123" deve
-     * alternar normalmente (não abrir menu), levando o Shift armado junto */
-    center_of_index(keyboard, find_key_index_by_label(keyboard, "Shift"), &x, &y);
-    tap(keyboard, x, y, events, &visual_changed);
     center_of_index(keyboard, find_key_index_by_label(keyboard, "?123"), &x, &y);
-    tap(keyboard, x, y, events, &visual_changed);
-    assert(find_key_index_by_label_opt(keyboard, "Voltar ao teclado") < 0);
-    int abc_index = find_key_index_by_label_opt(keyboard, "abc");
-    assert(abc_index >= 0); /* chegou na página de símbolos */
+    keyboard_handle_tap(keyboard, x, y, events, &right_click, &visual_changed);
 
-    /* símbolos: arma o Ctrl daqui — o chord completa e a tecla de página vira "Menu" */
-    center_of_index(keyboard, find_key_index_by_label(keyboard, "Ctrl"), &x, &y);
-    tap(keyboard, x, y, events, &visual_changed);
-    KeyboardKeyView page_key = keyboard_key_view(keyboard, abc_index);
-    assert(strcmp(page_key.label, "Menu") == 0);
-    assert(page_key.highlighted);
+    center_of_index(keyboard, find_key_index_by_label(keyboard, "Esquerdo"), &x, &y);
+    keyboard_handle_tap(keyboard, x, y, events, &right_click, &visual_changed);
+    assert(keyboard_left_click_armed(keyboard) == true);
 
-    center_of_index(keyboard, abc_index, &x, &y);
-    tap(keyboard, x, y, events, &visual_changed);
-    assert(find_key_index_by_label_opt(keyboard, "Voltar ao teclado") >= 0);
+    /* volta pra letras via "abc" — o arme não deve sobreviver à troca */
+    center_of_index(keyboard, find_key_index_by_label(keyboard, "abc"), &x, &y);
+    keyboard_handle_tap(keyboard, x, y, events, &right_click, &visual_changed);
+    assert(keyboard_left_click_armed(keyboard) == false);
+
+    keyboard_destroy(keyboard);
+}
+
+/* "Direito": ação imediata — 0 eventos, right_click vem true, sem mudar estado visual
+ * nem armar nada (diferente de Esquerdo, que é sticky). */
+static void test_right_click_key_reports_immediately(void) {
+    Keyboard *keyboard = keyboard_create(KB_TEST_WIDTH, KB_TEST_HEIGHT);
+    assert(keyboard != NULL);
+
+    KeyboardEvent events[KEYBOARD_MAX_EVENTS];
+    bool right_click = false;
+    bool visual_changed = false;
+    int page_index = find_key_index_by_label(keyboard, "?123");
+    int px, py;
+    center_of_index(keyboard, page_index, &px, &py);
+    keyboard_handle_tap(keyboard, px, py, events, &right_click, &visual_changed);
+
+    int right_index = find_key_index_by_label(keyboard, "Direito");
+    int rx, ry;
+    center_of_index(keyboard, right_index, &rx, &ry);
+
+    right_click = false;
+    visual_changed = true; /* sentinela */
+    int n = keyboard_handle_tap(keyboard, rx, ry, events, &right_click, &visual_changed);
+    assert(n == 0);
+    assert(right_click == true);
+    assert(visual_changed == false);
+    assert(keyboard_left_click_armed(keyboard) == false); /* não mexe no sticky esquerdo */
 
     keyboard_destroy(keyboard);
 }
@@ -696,12 +561,11 @@ int main(void) {
     test_page_switch_changes_keys_at_same_position();
     test_special_keys_send_expected_keysyms();
     test_modifier_taps_never_produce_events();
-    test_menu_chord_opens_menu_and_consumes_modifiers();
-    test_page_toggle_without_chord_never_opens_menu();
-    test_menu_actions_emit_expected_action_without_events();
-    test_menu_back_returns_to_letters_page();
     test_key_index_at_matches_label_lookup_and_handles_out_of_bounds();
-    test_menu_chord_works_from_symbols_page();
+    test_left_right_click_keys_only_on_symbols_page();
+    test_left_click_key_arms_and_toggles();
+    test_left_click_arm_cleared_by_page_switch();
+    test_right_click_key_reports_immediately();
 
     printf("test_keyboard: todos os testes passaram\n");
     return 0;

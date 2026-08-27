@@ -33,6 +33,16 @@ struct Session {
      * Reseta a cada nova conexão (try_connect). */
     bool resize_requested;
 
+    /* Última posição tocada no frame (clique de verdade, já validado dentro dos limites)
+     * — alvo dos botões de scroll e do clique direito. Começa em 0,0: degenerado mas
+     * inofensivo antes do primeiro toque real da sessão. */
+    int last_touch_x;
+    int last_touch_y;
+
+    /* Quantas catracas de roda por toque de scroll — ajustável pelo usuário, ver
+     * session_set_scroll_lines. Default 1, setado em session_start. */
+    int scroll_lines;
+
     /* Sources do GLib atualmente ativas (0 = nenhuma). No máximo uma de cada existe por
      * vez: ou a sessão está conectada (watch no fd) ou está re-tentando (timer de 2s). */
     guint watch_id;
@@ -173,6 +183,7 @@ Session *session_start(const char *host, int port, int target_width, int target_
     session->target_width = target_width;
     session->target_height = target_height;
     session->callbacks = callbacks;
+    session->scroll_lines = 1;
 
     if (!try_connect(session)) {
         schedule_retry(session);
@@ -191,11 +202,91 @@ void session_send_click(Session *session, int x, int y) {
         return;
     }
 
+    session->last_touch_x = x;
+    session->last_touch_y = y;
+
     /* clique esquerdo: pressiona e solta na mesma posição. Não busca atualização de volta
      * explicitamente — o pedido incremental já está em andamento (vnc_client_start_updates)
      * e vai capturar sozinho qualquer mudança de tela que esse clique causar no Pi. */
     vnc_client_send_pointer(session->client, x, y, 1);
     vnc_client_send_pointer(session->client, x, y, 0);
+}
+
+/* RFB PointerEvent button-mask: bit2 (valor 4) = botão 3 (direito), bit3 (valor 8) =
+ * botão 4 (roda pra cima), bit4 (valor 16) = botão 5 (roda pra baixo) — mesma convenção
+ * X11, mesmo padrão usado por todo cliente VNC. */
+#define POINTER_RIGHT_MASK 4
+#define POINTER_WHEEL_UP_MASK 8
+#define POINTER_WHEEL_DOWN_MASK 16
+
+void session_send_scroll(Session *session, bool up) {
+    if (!session->client || session->frame_width <= 0) {
+        return;
+    }
+    int mask = up ? POINTER_WHEEL_UP_MASK : POINTER_WHEEL_DOWN_MASK;
+    /* uma "catraca" = um par press+release; não existe mensagem RFB de "rolar N" numa
+     * chamada só — é assim que qualquer cliente VNC emula roda de N cliques. */
+    for (int i = 0; i < session->scroll_lines; i++) {
+        vnc_client_send_pointer(session->client, session->last_touch_x, session->last_touch_y,
+                                mask);
+        vnc_client_send_pointer(session->client, session->last_touch_x, session->last_touch_y,
+                                0);
+    }
+}
+
+int session_get_scroll_lines(const Session *session) {
+    return session->scroll_lines;
+}
+
+void session_set_scroll_lines(Session *session, int lines) {
+    session->scroll_lines = lines;
+}
+
+void session_send_right_click(Session *session) {
+    if (!session->client || session->frame_width <= 0) {
+        return;
+    }
+    vnc_client_send_pointer(session->client, session->last_touch_x, session->last_touch_y,
+                            POINTER_RIGHT_MASK);
+    vnc_client_send_pointer(session->client, session->last_touch_x, session->last_touch_y, 0);
+}
+
+void session_send_drag(Session *session, int x, int y, bool held) {
+    if (!session->client || session->frame_width <= 0) {
+        return;
+    }
+    /* Diferente do clique (que descarta coordenada fora dos limites), aqui SEMPRE
+     * clampa: ver contrato documentado em session.h. */
+    if (x < 0) {
+        x = 0;
+    }
+    if (y < 0) {
+        y = 0;
+    }
+    if (x >= session->frame_width) {
+        x = session->frame_width - 1;
+    }
+    if (y >= session->frame_height) {
+        y = session->frame_height - 1;
+    }
+
+    session->last_touch_x = x;
+    session->last_touch_y = y;
+    vnc_client_send_pointer(session->client, x, y, held ? 1 : 0);
+}
+
+void session_set_target_size(Session *session, int width, int height) {
+    session->target_width = width;
+    session->target_height = height;
+    if (!session->client) {
+        return; /* sem conexão agora; aplica sozinho quando reconectar (ver on_client_frame) */
+    }
+    char *error = NULL;
+    if (vnc_client_request_desktop_size(session->client, width, height, &error)) {
+        session->resize_requested = true;
+    } else {
+        report_error_and_free(error);
+    }
 }
 
 void session_send_key(Session *session, uint32_t keysym, bool down) {

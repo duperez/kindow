@@ -369,6 +369,32 @@ de uma vez nas sessões de deploy/debug via SSH deste projeto. Mitigação já e
 `pkill -x <nome-exato>` em vez de match por substring/caminho, sempre que o alvo tiver nome
 de processo estável e sem variação de invocação.
 
+### Achado #14: ghosting temporário de e-ink em transições de área grande (toggle do painel)
+
+Observado no hardware (27/08): tocar em "Teclado" pra fechar o painel (encolhe a faixa
+reservada, cresce a área do frame — `toggle_panel` em `ui.c`) deixou um traço fraco/cinza
+do que estava desenhado ali antes, por um instante. **Não é queima permanente estilo
+OLED** — mecanismo físico completamente diferente: e-ink usa partículas carregadas que
+migram dentro de microcápsulas, e "fantasma" é a partícula não ter migrado 100% num
+único ciclo de atualização; é temporário e some sozinho com outro refresh grande (mesmo
+princípio do "flash" preto-branco periódico que Kindles nativos fazem a cada N páginas).
+
+Causa provável: o projeto otimiza deliberadamente pra minimizar refresh desde o início
+(toda a base da investigação de latência), então fazemos bastante redraw *parcial*
+pequeno (flash de tecla, destaque de botão) sem nunca forçar um ciclo de limpeza
+completo — isso tende a acumular ghosting leve com o uso, mais visível justamente nas
+transições de área grande (abrir/fechar painel).
+
+Limitação real registrada: o projeto desenha via Cairo/GTK/X11 normal, sem bypass pro
+framebuffer `mxcfb` (decisão de arquitetura documentada desde o início — ver "O que já
+decidimos" no README) — por isso não temos comando direto sobre o MODO de refresh do
+e-ink (parcial "rápido e sujo" vs. completo "limpo"); quem decide isso é a camada abaixo
+da nossa. Não implementado por não ser necessário: o usuário reportou o traço como leve e
+sem impacto no uso. Se incomodar no futuro, a saída mais simples é forçar outro redraw
+grande (repetir o toggle já limpa, mesmo mecanismo que produziu o traço); um botão
+dedicado de "limpar tela" no menu é a extensão natural se for preciso, mas fica registrado
+como ideia, não implementado.
+
 ## Verificação (majoritariamente), não medição — exceto onde marcado
 
 Este documento registra sobretudo o que foi observado e corrigido nas sessões de teste — resolução

@@ -54,6 +54,23 @@ static void handle_zoom(App *app, const ZoomSpec *spec, int *value, int directio
     }
 }
 
+/* Linhas de scroll — etapa 4 da reestrutura (27/08): puramente client-side (diferente do
+ * zoom, não passa pelo kindow-helperd/Pi), mesmo formato de par -/+ do menu. */
+#define SCROLL_LINES_MIN 1
+#define SCROLL_LINES_MAX 10
+#define SCROLL_LINES_STEP 1
+
+static void handle_scroll_lines(App *app, int direction) {
+    int current = session_get_scroll_lines(app->session);
+    int next = current + direction * SCROLL_LINES_STEP;
+    if (next < SCROLL_LINES_MIN || next > SCROLL_LINES_MAX) {
+        g_printerr("kindow: linhas de scroll já está no limite (%d)\n", current);
+        return;
+    }
+    session_set_scroll_lines(app->session, next);
+    g_printerr("kindow: linhas de scroll agora é %d\n", next);
+}
+
 static void on_session_frame(int width, int height, const uint32_t *argb32_pixels,
                               void *user_data) {
     App *app = user_data;
@@ -70,36 +87,78 @@ static void on_ui_key(uint32_t keysym, bool down, void *user_data) {
     session_send_key(app->session, keysym, down);
 }
 
-static void on_ui_action(KeyboardAction action, void *user_data) {
+static void on_ui_action(MenuAction action, void *user_data) {
     App *app = user_data;
     switch (action) {
-    case KEYBOARD_ACTION_QUIT:
+    case MENU_ACTION_QUIT:
         gtk_main_quit(); /* limpeza (keep_awake(false) incluso) roda depois do gtk_main */
         break;
-    case KEYBOARD_ACTION_STATUS:
+    case MENU_ACTION_STATUS:
         session_log_status(app->session);
         break;
-    case KEYBOARD_ACTION_ZOOM_APPS_IN:
+    case MENU_ACTION_ZOOM_APPS_IN:
         handle_zoom(app, &kZoomApps, &app->remote.dpi, +1);
         break;
-    case KEYBOARD_ACTION_ZOOM_APPS_OUT:
+    case MENU_ACTION_ZOOM_APPS_OUT:
         handle_zoom(app, &kZoomApps, &app->remote.dpi, -1);
         break;
-    case KEYBOARD_ACTION_ZOOM_DECO_IN:
+    case MENU_ACTION_ZOOM_DECO_IN:
         handle_zoom(app, &kZoomDeco, &app->remote.deco, +1);
         break;
-    case KEYBOARD_ACTION_ZOOM_DECO_OUT:
+    case MENU_ACTION_ZOOM_DECO_OUT:
         handle_zoom(app, &kZoomDeco, &app->remote.deco, -1);
         break;
-    case KEYBOARD_ACTION_ZOOM_PANEL_IN:
+    case MENU_ACTION_ZOOM_PANEL_IN:
         handle_zoom(app, &kZoomPanel, &app->remote.panel, +1);
         break;
-    case KEYBOARD_ACTION_ZOOM_PANEL_OUT:
+    case MENU_ACTION_ZOOM_PANEL_OUT:
         handle_zoom(app, &kZoomPanel, &app->remote.panel, -1);
         break;
-    case KEYBOARD_ACTION_NONE:
+    case MENU_ACTION_SCROLL_LINES_IN:
+        handle_scroll_lines(app, +1);
+        break;
+    case MENU_ACTION_SCROLL_LINES_OUT:
+        handle_scroll_lines(app, -1);
+        break;
+    case MENU_ACTION_NONE:
         break;
     }
+}
+
+static void on_ui_bar(BarButton button, void *user_data) {
+    App *app = user_data;
+    switch (button) {
+    case BAR_SCROLL_UP:
+        session_send_scroll(app->session, true);
+        break;
+    case BAR_SCROLL_DOWN:
+        session_send_scroll(app->session, false);
+        break;
+    case BAR_TOGGLE_KEYBOARD:
+    case BAR_TOGGLE_MENU:
+        /* toggle_panel (ui.c) já decidiu o novo modo e, se preciso, chamou on_resize —
+         * nada a fazer aqui além do que on_resize já cobre. */
+        break;
+    }
+}
+
+static void on_ui_resize(int width, int height, void *user_data) {
+    App *app = user_data;
+    session_set_target_size(app->session, width, height);
+}
+
+/* Etapa 3 da reestrutura (27/08): arrasto vindo do clique esquerdo sticky (tecla
+ * "Esquerdo", página de símbolos do teclado) — held=true no press inicial e em cada
+ * posição intermediária, held=false quando o dedo levanta. session_send_drag decide
+ * sozinho o que mandar pro protocolo (ver session.h); esta função só repassa. */
+static void on_ui_drag(int x, int y, bool held, void *user_data) {
+    App *app = user_data;
+    session_send_drag(app->session, x, y, held);
+}
+
+static void on_ui_right_click(void *user_data) {
+    App *app = user_data;
+    session_send_right_click(app->session);
 }
 
 /* Gatilho de debug: `kill -HUP <pid>` imprime o estado atual da conexão no log — útil pra
@@ -136,7 +195,7 @@ int main(int argc, char **argv) {
     kindle_platform_keep_awake(true);
 
     app.ui = ui_create(kindle_platform_window_title(), on_ui_click, on_ui_key, on_ui_action,
-                        &app);
+                        on_ui_bar, on_ui_resize, on_ui_drag, on_ui_right_click, &app);
     if (!app.ui) {
         g_printerr("kindow: sem memória pra criar a UI\n");
         kindle_platform_keep_awake(false);
