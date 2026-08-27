@@ -1,93 +1,107 @@
 # Kindow
 
-Transforma um Kindle jailbreakado numa **tela de toque sem fio pra um Raspberry Pi**, via
-VNC: o desktop do Pi aparece no e-ink do Kindle, e o toque na tela vira mouse/teclado de
-volta — com atualização de tela só quando o conteúdo muda de verdade (um e-ink não
-aguentaria refresh contínuo, e o protocolo RFB já é sob demanda por design).
+*[Versão em português](docs/README.pt-BR.md)*
 
-**Status**: funcional de ponta a ponta em hardware real (Kindle KT5 + Raspberry Pi).
-Nasceu como prova de conceito e ainda tem cara de PoC em vários cantos — mas o ciclo
-completo (conectar, ver, tocar, digitar, arrastar) está validado no device físico.
+Turn a jailbroken Kindle into a **wireless touchscreen for a Raspberry Pi**, over VNC:
+the Pi's desktop shows up on the Kindle's e-ink display, and touching the screen sends
+mouse and keyboard input back — with screen updates only when content actually changes
+(an e-ink panel couldn't survive continuous refresh, and the RFB protocol is
+on-demand by design anyway).
 
-## O que ele faz hoje
+<p align="center">
+  <img src="docs/images/session.png" alt="Kindow session: the Pi's desktop with Mousepad, taskbar and the on-screen keyboard, rendered on the Kindle's e-ink display" width="420">
+  &nbsp;&nbsp;
+  <img src="docs/images/connect.png" alt="Kindow connection screen: saved Pi list, add-new button, and the bottom bar" width="420">
+</p>
 
-- **Desktop remoto interativo**: a sessão X do Pi (Openbox + tint2 + apps GTK)
-  renderizada 1:1 no Kindle — a resolução remota se ajusta sozinha à tela de qualquer
-  Kindle que conectar (`SetDesktopSize`), sem escala nem corte.
-- **Toque = mouse**: toque vira clique esquerdo; a página de símbolos do teclado tem
-  teclas dedicadas de clique **Esquerdo** (sticky — arma um clique contínuo/arrasto real,
-  que termina quando o dedo levanta) e **Direito**.
-- **Teclado virtual** com sticky Shift/Ctrl (chords tipo Ctrl+C funcionam sem
-  multi-touch) e página de símbolos.
-- **Barra fixa** no rodapé: scroll ↑/↓ (quantidade de "catracas" por toque ajustável),
-  mostrar/esconder o teclado, e menu.
-- **Menu**: zoom remoto em 3 camadas independentes (conteúdo dos apps via Xft/DPI,
-  decoração de janela, painel), desconectar, status da conexão, sair.
-- **Tela de conexão**: histórico dos Pis já usados (toque pra reconectar), formulário
-  pra adicionar novo (IP/porta/senha), senha de VNC clássica suportada, e mensagens de
-  erro de verdade quando a conexão não vinga.
-- **Abre por toque** na biblioteca do Kindle (scriptlet "Kindow"), sem precisar de SSH.
+*Both images are actual framebuffer captures from the device — this is exactly what the
+e-ink shows.*
 
-## Requisitos
+**Status**: working end to end on real hardware (Kindle KT5 + Raspberry Pi). It started
+as a proof of concept and still shows it in places — but the full loop (connect, see,
+touch, type, drag) is validated on the physical device.
 
-- **Kindle jailbreakado** com suporte a scriptlets (`.sh` tocável na biblioteca — o
-  mecanismo padrão do [jailbreak moderno](https://kindlemodding.org/)). Testado num KT5
-  (1072×1448); o layout é proporcional e deve se adaptar a outras resoluções, mas só o
-  KT5 foi validado.
-- **Raspberry Pi** (ou qualquer Linux Debian-like com `systemd`) na mesma rede, com SSH.
-- Pra compilar o cliente: o toolchain de cross-compilation do KindleModding
-  (koxtoolchain + KMC SDK) num container — ver "Compilando" abaixo.
+## What it does
 
-## Instalando
+- **Interactive remote desktop**: the Pi's X session (Openbox + tint2 + GTK apps)
+  rendered 1:1 on the Kindle — the remote resolution adapts automatically to whatever
+  Kindle connects (`SetDesktopSize`), no scaling, no cropping.
+- **Touch = mouse**: a tap is a left click; the keyboard's symbols page has dedicated
+  **Left** (sticky — arms a real press-and-drag that ends when your finger lifts) and
+  **Right** click keys.
+- **On-screen keyboard** with sticky Shift/Ctrl (chords like Ctrl+C work without
+  multi-touch) and a symbols page.
+- **Persistent bottom bar**: scroll ↑/↓ (wheel notches per tap are adjustable),
+  show/hide the keyboard, and the menu.
+- **Menu**: remote zoom in 3 independent layers (app content via Xft/DPI, window
+  decorations, panel), disconnect, connection status, quit.
+- **Connection screen**: history of previously used Pis (tap to reconnect), a form to
+  add a new one (IP/port/password), classic VNC password support, and real error
+  messages when a connection doesn't come up.
+- **Launches with a tap** from the Kindle's library (the "Kindow" scriptlet) — no SSH
+  needed to start it.
 
-### Lado Pi (servidor)
+## Requirements
+
+- A **jailbroken Kindle** with scriptlet support (a tappable `.sh` in the library — the
+  standard mechanism of the [modern jailbreak](https://kindlemodding.org/)). Tested on a
+  KT5 (1072×1448); the layout is proportional and should adapt to other resolutions,
+  but only the KT5 has been validated.
+- A **Raspberry Pi** (or any Debian-like Linux with `systemd`) on the same network,
+  reachable over SSH.
+- To build the client: the KindleModding cross-compilation toolchain (koxtoolchain +
+  KMC SDK) in a container — see "Building" below.
+
+## Installing
+
+### Pi side (server)
 
 ```bash
-scp -r pi/ pi@<ip-do-pi>:/tmp/kindow-pi && ssh -t pi@<ip-do-pi> 'bash /tmp/kindow-pi/install.sh'
+scp -r pi/ pi@<pi-ip>:/tmp/kindow-pi && ssh -t pi@<pi-ip> 'bash /tmp/kindow-pi/install.sh'
 ```
 
-O [`install.sh`](pi/install.sh) é idempotente (re-rodar é seguro): instala os pacotes
-(TigerVNC, Openbox, tint2, mousepad, xsettingsd), aplica as configs da sessão sem
-sobrescrever personalizações (zoom escolhido, `rc.xml` editado), instala e habilita os
-dois serviços (`vnc-kindle` na porta 5901, `kindow-helperd` na 5910 — o canal lateral do
-zoom) e verifica no final que ambos respondem.
+[`install.sh`](pi/install.sh) is idempotent (re-running is safe): it installs the
+packages (TigerVNC, Openbox, tint2, mousepad, xsettingsd), applies the session configs
+without overwriting your customizations (chosen zoom levels, an edited `rc.xml`),
+installs and enables both services (`vnc-kindle` on port 5901, `kindow-helperd` on
+5910 — the zoom side channel) and verifies at the end that both respond.
 
-### Lado Kindle (cliente)
+### Kindle side (client)
 
-Com o binário já cross-compilado (ver abaixo) e SSH root no Kindle:
+With the binary already cross-compiled (see below) and root SSH on the Kindle:
 
 ```bash
-./kindle/deploy.sh <ip-do-kindle>
+./kindle/deploy.sh <kindle-ip>
 ```
 
-Copia o binário + `libvncclient` pra `/mnt/us/kindow/`, instala o scriptlet
-[`kindle/kindow.sh`](kindle/kindow.sh) em `/mnt/us/documents/` (vira o item "Kindow"
-tocável na biblioteca) e relança o app.
+This copies the binary + `libvncclient` to `/mnt/us/kindow/`, installs the
+[`kindle/kindow.sh`](kindle/kindow.sh) scriptlet into `/mnt/us/documents/` (it becomes
+the tappable "Kindow" item in the library) and relaunches the app.
 
-### Compilando o cliente
+### Building the client
 
-O cliente é C/GTK2 (o GTK que o firmware do Kindle traz), cross-compilado com Meson
-dentro de um container com o toolchain do KindleModding — siga o
-[tutorial de GTK do KindleModding](https://kindlemodding.org/kindle-dev/gtk-tutorial/)
-pra montar o container (koxtoolchain + KMC SDK). Com ele de pé:
+The client is C/GTK2 (the GTK the Kindle firmware ships), cross-compiled with Meson
+inside a container with the KindleModding toolchain — follow the
+[KindleModding GTK tutorial](https://kindlemodding.org/kindle-dev/gtk-tutorial/) to set
+up the container (koxtoolchain + KMC SDK). With it running:
 
 ```bash
-# uma vez: o libvncclient vendorizado (submódulo), cross-compilado e instalado no
-# sysroot do toolchain — a receita completa e testada (todas as flags, o install no
-# sysroot e a verificação) está em docs/findings/libvncclient-api.md
+# once: the vendored libvncclient (submodule), cross-compiled and installed into the
+# toolchain sysroot — the full tested recipe (every flag, the sysroot install and the
+# verification) is in docs/findings/libvncclient-api.md
 cd vendor/libvncserver && cmake -B build -S . \
   -DCMAKE_TOOLCHAIN_FILE=../../cmake/Toolchain-arm-kindlehf-linux-gnueabihf.cmake \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=<sysroot-do-toolchain>/usr \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=<toolchain-sysroot>/usr \
   -DWITH_LIBVNCSERVER=OFF -DWITH_LIBVNCCLIENT=ON \
   -DWITH_GCRYPT=OFF -DWITH_OPENSSL=OFF -DWITH_GNUTLS=OFF -DWITH_JPEG=OFF -DWITH_PNG=OFF \
   -DBUILD_SHARED_LIBS=ON
 cmake --build build && cmake --install build
 
-# o app em si
-cd app && meson setup build --cross-file <seu-meson-crosscompile.txt> && ninja -C build
+# the app itself
+cd app && meson setup build --cross-file <your-meson-crosscompile.txt> && ninja -C build
 ```
 
-Os testes unitários dos módulos puros rodam em qualquer máquina, sem toolchain:
+The pure modules' unit tests run on any machine, no toolchain needed:
 
 ```bash
 cd app
@@ -96,56 +110,82 @@ cc -std=gnu11 -Wall -Wextra -Isrc src/keyboard.c tests/test_keyboard.c -o /tmp/t
 cc -std=gnu11 -Wall -Wextra -Isrc src/pixel_convert.c tests/test_pixel_convert.c -o /tmp/t && /tmp/t
 ```
 
-## Usando
+## Using it
 
-1. Toque em **"Kindow"** na biblioteca do Kindle (a Home aparece por ~3s antes do app —
-   é intencional, uma corrida com o redesenho da Home que o launcher precisa vencer).
-2. **Tela de conexão**: toque num Pi já usado pra reconectar, ou no **"+"** pra digitar
-   IP/porta/senha de um novo (senha em branco = servidor sem senha, o padrão do
-   `install.sh`). Conexões que funcionaram entram no histórico
-   (`/mnt/us/kindow/connections.txt` — a senha fica lá em texto simples, decisão
-   documentada em [`app/src/connection_store.h`](app/src/connection_store.h)).
-3. **Na sessão**: toque interage direto com o desktop do Pi. A barra do rodapé alterna
-   teclado/menu; a página `?123` do teclado tem os cliques Esquerdo (arrasto) e Direito.
-4. **Sair/trocar de Pi**: menu → "Desconectar do Pi" volta pra tela de conexão; sem
-   sessão ativa, o botão "Menu" da barra vira **"Sair"**.
+1. Tap **"Kindow"** in the Kindle's library (the Home screen shows for ~3s before the
+   app appears — that's intentional, a race against the Home redraw the launcher has to
+   win).
+2. **Connection screen**: tap a previously used Pi to reconnect, or **"+"** to enter
+   the IP/port/password of a new one (blank password = server without one, the
+   `install.sh` default). Successful connections are saved to the history
+   (`/mnt/us/kindow/connections.txt` — the password is stored there in plain text, a
+   documented decision, see [`app/src/connection_store.h`](app/src/connection_store.h)).
+3. **In the session**: touch interacts directly with the Pi's desktop. The bottom bar
+   toggles keyboard/menu; the keyboard's `?123` page has the Left (drag) and Right
+   click keys.
+4. **Quit / switch Pi**: menu → "Desconectar do Pi" goes back to the connection screen;
+   with no active session, the bar's "Menu" button becomes **"Sair"** (quit).
 
-## Arquitetura
+## Known limitations
 
-Ports & Adapters leve — cada dependência externa isolada atrás de um módulo próprio:
+- **Portrait only** for now — landscape rotation is on the roadmap
+  ([`docs/ideias-futuras.md`](docs/ideias-futuras.md)).
+- **Grayscale**: the client converts everything to 256 gray levels (and the e-ink panel
+  itself only really distinguishes ~16). No dithering yet, so smooth gradients may show
+  banding.
+- **Only the KT5 validated** (1072×1448). The layout is proportional by design, but no
+  other model has been tested.
+- **UI language is Portuguese** (buttons like "Teclado", "Sair", "Conectando…") — the
+  app was built by and for a Brazilian; i18n hasn't been a goal so far.
+- **Screensaver can get stuck off** if the process dies without cleanup (SIGKILL /
+  crash): the app disables the Kindle's screensaver while running and restores it on
+  every normal exit path, but nothing can run after a SIGKILL. Recovery:
+  `lipc-set-prop -i com.lab126.powerd preventScreenSaver 0` (or reboot).
+- **~3s launch delay** from the library tap, explained above.
+- **No VNC encryption**: classic VNC auth only, on a trusted local network. Don't
+  expose these ports to the internet.
 
-- [`app/src/main.c`](app/src/main.c) — só wiring: instancia os módulos e liga callbacks.
-- [`app/src/session.c`](app/src/session.c) — o núcleo: ciclo de vida da conexão
-  (conectar, reconectar sozinho, watch do fd), política de resize, envio de
-  clique/tecla/scroll/arrasto. Conhece GLib (event loop), não GTK nem VNC.
-- [`app/src/ui.c`](app/src/ui.c) — adapter de apresentação (GTK2/Cairo): janela, toque,
-  barra, painel teclado/menu, telas de conexão. Não conhece VNC.
-- [`app/src/vnc_client.c`](app/src/vnc_client.c) — único módulo que fala com
+## Architecture
+
+Lightweight Ports & Adapters — each external dependency isolated behind its own module:
+
+- [`app/src/main.c`](app/src/main.c) — wiring only: instantiates the modules and
+  connects callbacks.
+- [`app/src/session.c`](app/src/session.c) — the core: connection lifecycle (connect,
+  auto-reconnect, fd watch), resize policy, sending clicks/keys/scroll/drag. Knows GLib
+  (event loop), not GTK or VNC.
+- [`app/src/ui.c`](app/src/ui.c) — presentation adapter (GTK2/Cairo): window, touch,
+  bar, keyboard/menu panel, connection screens. Knows nothing about VNC.
+- [`app/src/vnc_client.c`](app/src/vnc_client.c) — the only module that talks to
   `libvncclient`.
-- [`app/src/kindle_platform.c`](app/src/kindle_platform.c) — específicos do device
-  (screensaver via `lipc`, título mágico de janela, diretório de dados).
-- Módulos puros e testáveis (zero GTK/VNC): [`keyboard.c`](app/src/keyboard.c) (layout,
-  hit-test, sticky keys), [`connection_store.c`](app/src/connection_store.c) (histórico
-  de conexões) e [`pixel_convert.c`](app/src/pixel_convert.c) (cores → cinza).
-- [`app/src/remote_control.c`](app/src/remote_control.c) — cliente TCP do
-  `kindow-helperd` (zoom remoto, fora do protocolo RFB).
-- [`pi/`](pi/) — o lado servidor completo (sessão X, serviços, instalador).
-- [`kindle/`](kindle/) — scriptlet de lançamento e script de deploy.
-- [`vendor/libvncserver`](vendor/libvncserver) — submódulo, pinado em 0.9.15.
+- [`app/src/kindle_platform.c`](app/src/kindle_platform.c) — device-specific bits
+  (screensaver via `lipc`, the magic window title, the data directory).
+- Pure, testable modules (zero GTK/VNC): [`keyboard.c`](app/src/keyboard.c) (layout,
+  hit-testing, sticky keys), [`connection_store.c`](app/src/connection_store.c)
+  (connection history) and [`pixel_convert.c`](app/src/pixel_convert.c)
+  (color → grayscale).
+- [`app/src/remote_control.c`](app/src/remote_control.c) — TCP client for
+  `kindow-helperd` (remote zoom, outside the RFB protocol).
+- [`pi/`](pi/) — the complete server side (X session, services, installer).
+- [`kindle/`](kindle/) — launch scriptlet and deploy script.
+- [`vendor/libvncserver`](vendor/libvncserver) — git submodule, pinned at 0.9.15.
 
-## Documentação técnica
+## Technical documentation
 
-- [`docs/findings/`](docs/findings/) — achados técnicos, um arquivo por
-  problema/solução: protocolo RFB e encodings, API da libvncclient (e os bugs reais dela
-  contornados), escolha do servidor VNC, e tudo que só o teste em hardware revelou.
-- [`docs/ideias-futuras.md`](docs/ideias-futuras.md) — a fila do que vem depois, com o
-  raciocínio registrado antes de cada implementação.
-- [`docs/historico-da-poc.md`](docs/historico-da-poc.md) — o diário cronológico da PoC
-  (o antigo conteúdo deste README), preservado como registro fiel de como o projeto
-  chegou aqui.
+Heads-up: everything under `docs/` is written in Portuguese — it's the project's
+working log, kept in its original language.
 
-## Licença
+- [`docs/findings/`](docs/findings/) — technical findings, one file per
+  problem/solution: the RFB protocol and encodings, the libvncclient API (and the real
+  bugs in it we worked around), the VNC server choice, and everything only real
+  hardware testing revealed.
+- [`docs/ideias-futuras.md`](docs/ideias-futuras.md) — the roadmap, with the reasoning
+  recorded before each implementation.
+- [`docs/historico-da-poc.md`](docs/historico-da-poc.md) — the chronological diary of
+  the proof of concept, preserved as a faithful record of how the project got here.
 
-[GPL-3.0](LICENSE). A escolha acompanha a dependência: o `libvncclient` vendorizado é
-GPL-2.0+, então qualquer binário distribuído já herdaria os termos GPL de qualquer
-jeito — licenciar o projeto inteiro como GPL é a opção coerente.
+## License
+
+[GPL-3.0](LICENSE). The choice follows the dependency: the vendored `libvncclient` is
+GPL-2.0-or-later, so any distributed binary would inherit GPL terms anyway — licensing
+the whole project as GPL is the coherent option.
