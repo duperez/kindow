@@ -8,13 +8,17 @@ volta — com atualização de tela só quando o conteúdo muda de verdade (um e
 aguentaria refresh contínuo, e o protocolo RFB já é sob demanda por design).
 
 <p align="center">
-  <img src="images/session.png" alt="Sessão do Kindow: o desktop do Pi com Mousepad, taskbar e o teclado virtual, renderizados no e-ink do Kindle" width="420">
-  &nbsp;&nbsp;
-  <img src="images/connect.png" alt="Tela de conexão do Kindow: lista de Pis salvos, botão de adicionar e a barra do rodapé" width="420">
+  <img src="images/kindow-photo.jpg" alt="Um Kindle num suporte, rodando o Kindow: o Mousepad do Pi com 'Hello from Kindow' digitado no teclado virtual, em e-ink de verdade" width="640">
 </p>
 
-*As duas imagens são capturas reais do framebuffer do device — é exatamente o que o
-e-ink mostra.*
+<p align="center">
+  <img src="images/session.png" alt="Captura de framebuffer de uma sessão do Kindow: o desktop do Pi com Mousepad, taskbar e o teclado virtual" width="380">
+  &nbsp;&nbsp;
+  <img src="images/connect.png" alt="Captura de framebuffer da tela de conexão do Kindow: lista de Pis salvos, botão de adicionar e a barra do rodapé" width="380">
+</p>
+
+*A foto é o device real; as duas imagens menores são capturas do framebuffer — exatamente
+o que o e-ink mostra, pixel por pixel.*
 
 **Status**: funcional de ponta a ponta em hardware real (Kindle KT5 + Raspberry Pi).
 Nasceu como prova de conceito e ainda tem cara de PoC em vários cantos — mas o ciclo

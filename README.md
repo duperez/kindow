@@ -9,13 +9,17 @@ mouse and keyboard input back — with screen updates only when content actually
 on-demand by design anyway).
 
 <p align="center">
-  <img src="docs/images/session.png" alt="Kindow session: the Pi's desktop with Mousepad, taskbar and the on-screen keyboard, rendered on the Kindle's e-ink display" width="420">
-  &nbsp;&nbsp;
-  <img src="docs/images/connect.png" alt="Kindow connection screen: saved Pi list, add-new button, and the bottom bar" width="420">
+  <img src="docs/images/kindow-photo.jpg" alt="A Kindle on a stand, running Kindow: the Pi's Mousepad editor with 'Hello from Kindow' typed on the on-screen keyboard, on real e-ink" width="640">
 </p>
 
-*Both images are actual framebuffer captures from the device — this is exactly what the
-e-ink shows.*
+<p align="center">
+  <img src="docs/images/session.png" alt="Framebuffer capture of a Kindow session: the Pi's desktop with Mousepad, taskbar and the on-screen keyboard" width="380">
+  &nbsp;&nbsp;
+  <img src="docs/images/connect.png" alt="Framebuffer capture of the Kindow connection screen: saved Pi list, add-new button, and the bottom bar" width="380">
+</p>
+
+*The photo is the real device; the two smaller images are framebuffer captures — exactly
+what the e-ink shows, pixel for pixel.*
 
 **Status**: working end to end on real hardware (Kindle KT5 + Raspberry Pi). It started
 as a proof of concept and still shows it in places — but the full loop (connect, see,
