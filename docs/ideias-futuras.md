@@ -6,16 +6,16 @@ partida pra sessões futuras, não um registro do que já foi decidido.
 
 ## Fila da parte 2 da PoC (ordenada em 26/08)
 
-**Nota sobre a sessão de 27/08 (noite)**: os itens 3, 4 e 5 (scroll ajustável, clique
-esquerdo/direito, proporção de tela) foram implementados numa sessão em que o usuário foi
-dormir e pediu pra eu avançar sozinho. Cross-compilado, deployado no device, confirmado
-que conecta e roda sem crash/warning — o máximo verificável sem alguém tocando a tela
-física (regra do projeto: nunca alegar verificação visual sem os olhos do usuário). O
-item 4 em particular (arrasto/clique contínuo) é a peça mais arriscada de toda a
-reestrutura de UI — primeira vez que o app rastreia movimento contínuo, com premissas
-genuinamente não testadas (ver a seção de honestidade dentro do item 4). Tratar como
-"implementado, aguardando validação humana", não como "feito" no mesmo sentido dos itens
-anteriores desta fila.
+**Nota sobre a sessão de 27/08 (noite → manhã)**: os itens 3, 4 e 5 (scroll ajustável,
+clique esquerdo/direito, proporção de tela) foram implementados numa sessão em que o
+usuário foi dormir e pediu pra eu avançar sozinho. Cross-compilado, deployado, revisado
+(reviewer achou um bug real — vazamento do clique-esquerdo-armado entre páginas/painéis
+— corrigido e reconfirmado por recheck) e commitado localmente ainda de madrugada, sem
+alegar verificação visual nenhuma até aí (regra do projeto: só os olhos do usuário
+contam). **Testado e confirmado funcionando pelo usuário ao acordar** — incluindo o item
+4 (arrasto/clique contínuo), que era a peça mais arriscada de toda a reestrutura (primeira
+vez que o app rastreia movimento contínuo). Os três itens abaixo já refletem esse
+"feito", não mais "pendente".
 
 A parte 1 (provar que o Kindle funciona como tela interativa sem fio pro Pi) está fechada.
 Estes são os próximos itens, ordenados por **o que faz mais sentido agora** e, como critério
@@ -63,15 +63,13 @@ de desempate, **o que é mais simples de fazer**:
    botões 4/5, na última posição tocada no conteúdo (`session_send_scroll`,
    `last_touch_x/y` em `session.c`) — um toque = uma "catraca" de roda.
 
-   **Etapa 4 da reestrutura de UI — implementada (27/08), pendente validação em
-   hardware**: usuário ajusta quantas catracas cada toque manda, por um par -/+ no menu
-   ("Scroll A-"/"Scroll A+"). Puramente client-side (diferente do zoom, não passa pelo
-   `kindow-helperd`/Pi) — `session_get/set_scroll_lines` guardam o valor (default 1,
-   faixa 1-10), `session_send_scroll` manda N pares press+release em vez de sempre 1.
-   Compilado, cross-compilado, deployado — não validado no hardware ainda (sessão
-   noturna sem o usuário presente, ver nota no topo do arquivo).
+   **Etapa 4 da reestrutura de UI — feito e validado (27/08)**: usuário ajusta quantas
+   catracas cada toque manda, por um par -/+ no menu ("Scroll A-"/"Scroll A+").
+   Puramente client-side (diferente do zoom, não passa pelo `kindow-helperd`/Pi) —
+   `session_get/set_scroll_lines` guardam o valor (default 1, faixa 1-10),
+   `session_send_scroll` manda N pares press+release em vez de sempre 1.
 
-4. **Botão direito** — **implementado (27/08), pendente validação em hardware**. O
+4. **Botão direito** — **feito e validado (27/08)**. O
    desenho original (toque longo) foi revisto durante a reestrutura de UI da
    barra/teclado, numa troca de mensagens com o usuário antes de dormir: o timing de
    toque longo nunca chegou a ser validado no hardware, e o padrão que vinha se firmando
@@ -96,16 +94,15 @@ de desempate, **o que é mais simples de fazer**:
    redimensionar, selecionar texto) é decidido pelo servidor (Openbox/GTK) pela posição
    onde começou — nenhuma desambiguação nossa.
 
-   **Honestidade sobre o que NÃO foi validado** (implementado numa sessão sem o usuário
-   presente pra testar na tela física — ver nota no topo do arquivo): (a) se o Openbox
+   **Validado no hardware pelo usuário (27/08, manhã)**: as três dúvidas que ficaram em
+   aberto quando isso foi implementado sem ninguém pra testar — (a) se o Openbox
    realmente move/redimensiona janela a partir de eventos de motion sintetizados via
-   VNC — nunca testado neste projeto; (b) se esse touchscreen específico rastreia
-   contato contínuo de forma confiável (capacitivo/resistivo/infravermelho — não
-   confirmado); (c) se o throttle de 8px é suficiente pra evitar tempestade de refresh
-   no e-ink durante um arrasto real. Testes unitários novos em `test_keyboard.c` cobrem
-   a LÓGICA de `keyboard.c` (Esquerdo só na página de símbolos, toggle, consumo externo,
-   Direito reportando sem armar nada) — mas não substituem o teste no device, que só
-   valida protocolo/hit-test, não a experiência física do arrasto.
+   VNC, (b) se esse touchscreen rastreia contato contínuo de forma confiável, (c) se o
+   throttle de 8px basta pra evitar tempestade de refresh no e-ink — todas confirmadas
+   funcionando na prática ("está tudo funcionando"). Testes unitários em
+   `test_keyboard.c` cobrem a LÓGICA de `keyboard.c` (Esquerdo só na página de símbolos,
+   toggle, consumo externo, Direito reportando sem armar nada); a experiência física do
+   arrasto em si só o teste no device confirma, e confirmou.
 
    **Achado real de review corrigido antes do commit**: `left_click_armed` vazava entre
    páginas/painéis — armar "Esquerdo" na página de símbolos e depois trocar de página
@@ -138,18 +135,17 @@ de desempate, **o que é mais simples de fazer**:
    dados necessários), lembrando os dados da última sessão (persistência local em
    `/mnt/us/kindow/`).
 
-   **Etapa 5 da reestrutura de UI — implementada (27/08)**: `BAR_HEIGHT_PX` (60px fixos)
-   virou `BAR_HEIGHT_PERCENT` (4% da altura da tela, com piso de 40px pra telas
+   **Etapa 5 da reestrutura de UI — feito e validado (27/08)**: `BAR_HEIGHT_PX` (60px
+   fixos) virou `BAR_HEIGHT_PERCENT` (4% da altura da tela, com piso de 40px pra telas
    hipotéticas muito baixas) — reproduz ~57px no device testado (1072×1448), perto do
    valor original. Insets entre teclas/botões/itens de menu e largura de borda também
    viraram proporcionais (`proportional_inset`/`proportional_border_width` em `ui.c`,
    calculados a partir da altura LOCAL de cada linha/botão, não da tela inteira — mantém
-   o mesmo peso visual relativo em qualquer resolução). Validado o que dá pra validar
-   sem tela física: a fórmula bateu exatamente com o esperado no log do device
-   (`keyboard_top=904`, conferido à mão contra a conta:
+   o mesmo peso visual relativo em qualquer resolução). A fórmula bateu exatamente com o
+   esperado no log do device (`keyboard_top=904`, conferido à mão contra a conta:
    `screen_height=1448 → bar_height=max(1448*4/100, 40)=57 → bar_top=1391 →
-   keyboard_top=1391*65/100=904`) — mas o RESULTADO VISUAL (as bordas/gaps parecem
-   proporcionalmente certos?) ainda depende do usuário olhar a tela.
+   keyboard_top=1391*65/100=904`), e o resultado visual (bordas/gaps) foi confirmado
+   pelo usuário — continua com a mesma aparência/toque confortável de antes.
 
    **Fora do escopo desta etapa, por já estar resolvido**: a área do frame (tela do Pi)
    não precisa de conversão nenhuma — ela nunca foi pixel fixo. `ui_frame_width/height`
