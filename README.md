@@ -67,6 +67,12 @@ Kindle's own library. No cables, no extra hardware.
 - A **Raspberry Pi** — or any Debian-like Linux with `systemd` — on the same network,
   reachable over SSH.
 
+> **Quick install:** the [Releases page](https://github.com/duperez/kindow/releases)
+> has a pre-built package with the Kindle binary, the launch scriptlet, the complete
+> Pi server side and install scripts — no toolchain required. The steps below apply
+> both to the package and to a repository checkout; building from source is only
+> needed if you want to modify the client.
+
 ### Install the server (Pi)
 
 ```bash
@@ -79,7 +85,13 @@ customizations, enables the two services and verifies that both respond.
 
 ### Install the client (Kindle)
 
-With the binary cross-compiled (next section) and root SSH access to the Kindle:
+From a release package, with root SSH access to the Kindle:
+
+```bash
+./install-kindle.sh <kindle-ip>
+```
+
+From a repository checkout (binary cross-compiled first, next section):
 
 ```bash
 ./kindle/deploy.sh <kindle-ip>

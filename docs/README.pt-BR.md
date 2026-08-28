@@ -69,6 +69,12 @@ em segundo plano.*
 - Um **Raspberry Pi** — ou qualquer Linux Debian-like com `systemd` — na mesma rede,
   acessível por SSH.
 
+> **Instalação rápida:** a [página de Releases](https://github.com/duperez/kindow/releases)
+> tem um pacote pré-compilado com o binário do Kindle, o scriptlet de lançamento, o
+> lado servidor completo e os scripts de instalação — sem precisar de toolchain. Os
+> passos abaixo valem tanto pro pacote quanto pro checkout do repositório; compilar do
+> zero só é necessário pra modificar o cliente.
+
 ### Instalar o servidor (Pi)
 
 ```bash
@@ -81,7 +87,13 @@ habilita os dois serviços e verifica que ambos respondem.
 
 ### Instalar o cliente (Kindle)
 
-Com o binário cross-compilado (próxima seção) e acesso SSH root ao Kindle:
+A partir de um pacote de release, com acesso SSH root ao Kindle:
+
+```bash
+./install-kindle.sh <ip-do-kindle>
+```
+
+A partir de um checkout do repositório (binário cross-compilado antes, próxima seção):
 
 ```bash
 ./kindle/deploy.sh <ip-do-kindle>
