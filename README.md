@@ -9,7 +9,9 @@ mouse and keyboard input back — with screen updates only when content actually
 on-demand by design anyway).
 
 <p align="center">
-  <img src="docs/images/kindow-photo.jpg" alt="A Kindle on a stand, running Kindow: the Pi's Mousepad editor with 'Hello from Kindow' typed on the on-screen keyboard, on real e-ink" width="640">
+  <img src="docs/images/kindow-photo.jpg" alt="A Kindle on a stand, running Kindow: the Pi's Mousepad editor with 'Hello from Kindow' typed on the on-screen keyboard, on real e-ink" width="420">
+  &nbsp;&nbsp;
+  <img src="docs/images/kindow-photo-files.jpg" alt="The same Kindle browsing the Pi's filesystem with the PCManFM file manager, taskbar showing multiple open apps" width="420">
 </p>
 
 <p align="center">

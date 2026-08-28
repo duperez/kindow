@@ -8,7 +8,9 @@ volta — com atualização de tela só quando o conteúdo muda de verdade (um e
 aguentaria refresh contínuo, e o protocolo RFB já é sob demanda por design).
 
 <p align="center">
-  <img src="images/kindow-photo.jpg" alt="Um Kindle num suporte, rodando o Kindow: o Mousepad do Pi com 'Hello from Kindow' digitado no teclado virtual, em e-ink de verdade" width="640">
+  <img src="images/kindow-photo.jpg" alt="Um Kindle num suporte, rodando o Kindow: o Mousepad do Pi com 'Hello from Kindow' digitado no teclado virtual, em e-ink de verdade" width="420">
+  &nbsp;&nbsp;
+  <img src="images/kindow-photo-files.jpg" alt="O mesmo Kindle navegando o filesystem do Pi com o gerenciador de arquivos PCManFM, taskbar com vários apps abertos" width="420">
 </p>
 
 <p align="center">
