@@ -644,6 +644,11 @@ static void draw_connecting_message(cairo_t *cr, const Ui *ui) {
     cairo_rectangle(cr, 0, 0, ui->screen_width, ui->keyboard_top);
     cairo_fill(cr);
 
+    /* Preto explícito ANTES dos rótulos — sem isso o texto sai branco sobre o fundo
+     * branco recém-pintado acima (bug real: a mensagem de conectando/erro ficou
+     * invisível até um screenshot de framebuffer revelar, 27/08 — o usuário via "só
+     * um botão Voltar" na tela). */
+    cairo_set_source_rgb(cr, 0, 0, 0);
     cairo_select_font_face(cr, "DejaVu Sans", CAIRO_FONT_SLANT_NORMAL,
                             CAIRO_FONT_WEIGHT_BOLD);
 
