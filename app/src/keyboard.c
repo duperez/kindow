@@ -1,5 +1,7 @@
 #include "keyboard.h"
 
+#include "strings.h"
+
 #include <stdlib.h>
 
 /* Keysyms X11 usados aqui (rfb/keysym.h existe na lib vendorizada, mas incluir ele
@@ -118,8 +120,8 @@ static const KeyDef kRowSpaceSymbols[] = {
     {"abc", NULL, 0, 0, 1.5f, KEY_PAGE},
     {"Ctrl", NULL, 0, 0, 1.5f, KEY_CTRL},
     K(',', ","),
-    {"Esquerdo", NULL, 0, 0, 1.5f, KEY_LEFT_CLICK},
-    {"Direito", NULL, 0, 0, 1.5f, KEY_RIGHT_CLICK},
+    {"", NULL, 0, 0, 1.5f, KEY_LEFT_CLICK},  /* rótulo via tr(), ver keyboard_key_view */
+    {"", NULL, 0, 0, 1.5f, KEY_RIGHT_CLICK}, /* rótulo via tr(), ver keyboard_key_view */
     K('.', "."),
     {"Enter", NULL, KS_RETURN, 0, 2.0f, KEY_NORMAL},
 };
@@ -228,6 +230,14 @@ KeyboardKeyView keyboard_key_view(const Keyboard *keyboard, int index) {
                        (place->def->type == KEY_CTRL && keyboard->ctrl_armed) ||
                        (place->def->type == KEY_LEFT_CLICK && keyboard->left_click_armed),
     };
+    /* As duas únicas teclas com rótulo traduzível (i18n, 27/08) — resolvidas na hora
+     * da leitura, não no layout estático, pra tabela kRow* continuar const. O resto do
+     * teclado (letras, símbolos, Shift/Ctrl/Enter/Tab/Esc/Bksp) é universal. */
+    if (place->def->type == KEY_LEFT_CLICK) {
+        view.label = tr(STR_KEY_LEFT_CLICK);
+    } else if (place->def->type == KEY_RIGHT_CLICK) {
+        view.label = tr(STR_KEY_RIGHT_CLICK);
+    }
     return view;
 }
 

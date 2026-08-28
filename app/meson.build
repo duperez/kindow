@@ -13,6 +13,7 @@ sources = files(
     'src/vnc_client.c',
     'src/pixel_convert.c',
     'src/connection_store.c',
+    'src/strings.c',
 )
 
 executable('kindow-client', sources, dependencies: [gtk_dep, vnc_dep])
@@ -30,7 +31,7 @@ test('pixel_convert', test_pixel_convert)
 # testável como unidade — ver app/tests/test_keyboard.c.
 test_keyboard = executable(
     'test-keyboard',
-    files('src/keyboard.c', 'tests/test_keyboard.c'),
+    files('src/keyboard.c', 'src/strings.c', 'tests/test_keyboard.c'),
     include_directories: include_directories('src'),
 )
 test('keyboard', test_keyboard)
@@ -43,3 +44,12 @@ test_connection_store = executable(
     include_directories: include_directories('src'),
 )
 test('connection_store', test_connection_store)
+
+# strings.c é o módulo puro de i18n da UI (duas línguas, tr() por id) — ver
+# app/tests/test_strings.c.
+test_strings = executable(
+    'test-strings',
+    files('src/strings.c', 'tests/test_strings.c'),
+    include_directories: include_directories('src'),
+)
+test('strings', test_strings)

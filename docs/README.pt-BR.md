@@ -34,6 +34,8 @@ biblioteca do próprio Kindle. Sem cabos, sem hardware extra.
   pelo Pi entre sessões.
 - **Múltiplos servidores** — gerenciador de conexões com histórico, reconexão num
   toque, suporte a senha de VNC e mensagens claras de erro quando a conexão falha.
+- **Inglês e português** — a UI segue o idioma do sistema do Kindle (português quando
+  o device está configurado assim, inglês nos demais casos).
 - **Amigável ao e-ink por design** — a tela só atualiza quando o conteúdo muda de
   verdade; não há polling, refresh periódico nem redesenho desnecessário.
 
@@ -116,8 +118,9 @@ Os módulos puros têm testes unitários que rodam em qualquer máquina, sem too
 ```bash
 cd app
 cc -std=gnu11 -Wall -Wextra -Isrc src/connection_store.c tests/test_connection_store.c -o /tmp/t && /tmp/t
-cc -std=gnu11 -Wall -Wextra -Isrc src/keyboard.c tests/test_keyboard.c -o /tmp/t && /tmp/t
+cc -std=gnu11 -Wall -Wextra -Isrc src/keyboard.c src/strings.c tests/test_keyboard.c -o /tmp/t && /tmp/t
 cc -std=gnu11 -Wall -Wextra -Isrc src/pixel_convert.c tests/test_pixel_convert.c -o /tmp/t && /tmp/t
+cc -std=gnu11 -Wall -Wextra -Isrc src/strings.c tests/test_strings.c -o /tmp/t && /tmp/t
 ```
 
 ## Como funciona

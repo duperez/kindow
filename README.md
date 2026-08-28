@@ -33,6 +33,8 @@ Kindle's own library. No cables, no extra hardware.
   by the Pi across sessions.
 - **Multiple servers** — a connection manager with history, one-tap reconnect, VNC
   password support, and clear error messages when a connection fails.
+- **English and Portuguese** — the UI follows the Kindle's system language
+  (Portuguese when the device is set to it, English otherwise).
 - **E-ink friendly by design** — the screen only updates when content actually
   changes; there is no polling, no periodic refresh, no unnecessary redraw.
 
@@ -114,8 +116,9 @@ The pure modules have unit tests that run on any machine, no toolchain required:
 ```bash
 cd app
 cc -std=gnu11 -Wall -Wextra -Isrc src/connection_store.c tests/test_connection_store.c -o /tmp/t && /tmp/t
-cc -std=gnu11 -Wall -Wextra -Isrc src/keyboard.c tests/test_keyboard.c -o /tmp/t && /tmp/t
+cc -std=gnu11 -Wall -Wextra -Isrc src/keyboard.c src/strings.c tests/test_keyboard.c -o /tmp/t && /tmp/t
 cc -std=gnu11 -Wall -Wextra -Isrc src/pixel_convert.c tests/test_pixel_convert.c -o /tmp/t && /tmp/t
+cc -std=gnu11 -Wall -Wextra -Isrc src/strings.c tests/test_strings.c -o /tmp/t && /tmp/t
 ```
 
 ## How it works
@@ -178,8 +181,6 @@ connection history and the pixel conversion. See [`app/src/`](app/src/).
 - **Portrait only** — landscape rotation is on the roadmap.
 - **Grayscale, no dithering yet** — smooth gradients may show banding.
 - **One validated model** — only the KT5 (1072×1448) has been tested.
-- **Portuguese-only UI** — button labels are in Portuguese; internationalization has
-  not yet been addressed.
 - **Plain-text password storage** — saved VNC passwords live unencrypted on the
   Kindle's storage; anyone with physical or SSH access to the device can read them.
 - **Screensaver recovery after a crash** — if the process dies without cleanup

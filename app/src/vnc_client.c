@@ -8,6 +8,7 @@
 #include <rfb/rfbclient.h>
 
 #include "pixel_convert.h"
+#include "strings.h"
 #include "timing.h"
 
 struct VncClient {
@@ -97,7 +98,7 @@ VncClient *vnc_client_connect(const char *host, int port, const char *password,
                               char **out_error) {
     rfbClient *rfb = rfbGetClient(8, 3, 4);
     if (!rfb) {
-        set_error(out_error, "rfbGetClient falhou");
+        set_error(out_error, tr(STR_ERR_INIT_FAILED));
         return NULL;
     }
 
@@ -115,7 +116,7 @@ VncClient *vnc_client_connect(const char *host, int port, const char *password,
     VncClient *self = calloc(1, sizeof(VncClient));
     if (!self) {
         rfbClientCleanup(rfb);
-        set_error(out_error, "sem memória");
+        set_error(out_error, tr(STR_ERR_OUT_OF_MEMORY));
         return NULL;
     }
     self->rfb = rfb;
@@ -128,7 +129,7 @@ VncClient *vnc_client_connect(const char *host, int port, const char *password,
     rfbClientSetClientData(rfb, (void *)kClientDataTag, self);
 
     if (!ConnectToRFBServer(rfb, host, port)) {
-        set_error(out_error, "não foi possível conectar ao servidor VNC");
+        set_error(out_error, tr(STR_ERR_CONNECT_FAILED));
         rfbClientCleanup(rfb);
         free(self);
         return NULL;
@@ -140,12 +141,10 @@ VncClient *vnc_client_connect(const char *host, int port, const char *password,
              * que a resposta foi lida — numa janela estreita (rede caindo no meio da
              * leitura do resultado da autenticação), a falha é de rede, não de senha
              * (achado de review, 27/08). A tentativa seguinte do retry esclarece. */
-            set_error(out_error, self->password[0]
-                                      ? "servidor provavelmente recusou a senha de VNC"
-                                      : "este servidor VNC exige senha — preencha o campo "
-                                        "Senha no formulário de conexão");
+            set_error(out_error, self->password[0] ? tr(STR_ERR_PASSWORD_REFUSED)
+                                                    : tr(STR_ERR_NEEDS_PASSWORD));
         } else {
-            set_error(out_error, "handshake RFB falhou");
+            set_error(out_error, tr(STR_ERR_HANDSHAKE_FAILED));
         }
         rfbClientCleanup(rfb);
         free(self);
@@ -156,14 +155,14 @@ VncClient *vnc_client_connect(const char *host, int port, const char *password,
     rfb->height = rfb->si.framebufferHeight;
 
     if (!rfb->MallocFrameBuffer(rfb)) {
-        set_error(out_error, "sem memória pro framebuffer");
+        set_error(out_error, tr(STR_ERR_OUT_OF_MEMORY));
         rfbClientCleanup(rfb);
         free(self);
         return NULL;
     }
 
     if (!SetFormatAndEncodings(rfb)) {
-        set_error(out_error, "SetFormatAndEncodings falhou");
+        set_error(out_error, tr(STR_ERR_SESSION_SETUP_FAILED));
         free(rfb->frameBuffer);
         rfbClientCleanup(rfb);
         free(self);
@@ -200,7 +199,7 @@ int vnc_client_get_fd(const VncClient *client) {
 bool vnc_client_start_updates(VncClient *client, char **out_error) {
     rfbClient *rfb = client->rfb;
     if (client->updates_started) {
-        set_error(out_error, "vnc_client_start_updates já foi chamado nessa conexão");
+        set_error(out_error, tr(STR_ERR_UPDATES_ALREADY_STARTED));
         return false;
     }
     client->updates_started = true;
@@ -208,7 +207,7 @@ bool vnc_client_start_updates(VncClient *client, char **out_error) {
     client->got_pixels = false;
 
     if (!SendFramebufferUpdateRequest(rfb, 0, 0, rfb->width, rfb->height, FALSE)) {
-        set_error(out_error, "falha ao pedir a primeira atualização de tela");
+        set_error(out_error, tr(STR_ERR_FIRST_UPDATE_FAILED));
         return false;
     }
     return true;

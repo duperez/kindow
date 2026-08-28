@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "keyboard.h"
+#include "strings.h"
 
 /* Keysyms X11 usados nas asserções — espelham as constantes internas de keyboard.c.
  * Não incluímos keyboard.c aqui de propósito: o teste deve validar o CONTRATO público
@@ -552,6 +553,11 @@ static void test_right_click_key_reports_immediately(void) {
 }
 
 int main(void) {
+    /* Os testes procuram as teclas de clique pelos rótulos em português — fixa a língua
+     * explicitamente (o default do módulo strings é inglês) pra suíte não depender do
+     * ambiente. A LÓGICA testada é idêntica nas duas línguas; só o rótulo muda. */
+    strings_set_language(LANG_PT);
+
     test_geometry_rows_span_full_width_and_height();
     test_tap_on_known_key_generates_down_up_pair();
     test_tap_outside_any_key_returns_zero_events();

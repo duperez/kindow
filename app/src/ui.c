@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "keyboard.h"
+#include "strings.h"
 #include "timing.h"
 
 /* Quanto tempo a tecla tocada fica invertida (pedido do usuário: tecla normal "pisca"
@@ -280,29 +281,29 @@ static void draw_keyboard(cairo_t *cr, const Ui *ui) {
 typedef struct {
     int row;
     float x0, x1; /* fração horizontal ocupada nessa linha, 0..1 */
-    const char *label;
+    StringId label; /* resolvido via tr() na hora de desenhar (i18n, 27/08) */
     MenuAction action;
 } MenuItem;
 
 #define MENU_ROWS 7
 
 static const MenuItem kMenuItems[] = {
-    {0, 0.0f, 0.5f, "Apps  A-", MENU_ACTION_ZOOM_APPS_OUT},
-    {0, 0.5f, 1.0f, "Apps  A+", MENU_ACTION_ZOOM_APPS_IN},
-    {1, 0.0f, 0.5f, "Janela  A-", MENU_ACTION_ZOOM_DECO_OUT},
-    {1, 0.5f, 1.0f, "Janela  A+", MENU_ACTION_ZOOM_DECO_IN},
-    {2, 0.0f, 0.5f, "Painel  A-", MENU_ACTION_ZOOM_PANEL_OUT},
-    {2, 0.5f, 1.0f, "Painel  A+", MENU_ACTION_ZOOM_PANEL_IN},
+    {0, 0.0f, 0.5f, STR_MENU_APPS_OUT, MENU_ACTION_ZOOM_APPS_OUT},
+    {0, 0.5f, 1.0f, STR_MENU_APPS_IN, MENU_ACTION_ZOOM_APPS_IN},
+    {1, 0.0f, 0.5f, STR_MENU_DECO_OUT, MENU_ACTION_ZOOM_DECO_OUT},
+    {1, 0.5f, 1.0f, STR_MENU_DECO_IN, MENU_ACTION_ZOOM_DECO_IN},
+    {2, 0.0f, 0.5f, STR_MENU_PANEL_OUT, MENU_ACTION_ZOOM_PANEL_OUT},
+    {2, 0.5f, 1.0f, STR_MENU_PANEL_IN, MENU_ACTION_ZOOM_PANEL_IN},
     /* Etapa 4 da reestrutura (27/08): quantas catracas de roda o scroll manda por toque
      * — puramente client-side, não passa pelo kindow-helperd/Pi (ver session.c). */
-    {3, 0.0f, 0.5f, "Scroll  A-", MENU_ACTION_SCROLL_LINES_OUT},
-    {3, 0.5f, 1.0f, "Scroll  A+", MENU_ACTION_SCROLL_LINES_IN},
+    {3, 0.0f, 0.5f, STR_MENU_SCROLL_OUT, MENU_ACTION_SCROLL_LINES_OUT},
+    {3, 0.5f, 1.0f, STR_MENU_SCROLL_IN, MENU_ACTION_SCROLL_LINES_IN},
     /* Item 5 da fila (27/08): volta pra tela de conexão sem mexer no histórico salvo —
      * linha isolada, mesmo raciocínio de Status/Sair (longe de toque acidental nos
      * pares de zoom/scroll, que são os controles mais usados no dia a dia). */
-    {4, 0.0f, 1.0f, "Desconectar do Pi", MENU_ACTION_DISCONNECT},
-    {5, 0.0f, 1.0f, "Status da conexão (log)", MENU_ACTION_STATUS},
-    {6, 0.0f, 1.0f, "Sair do Kindow", MENU_ACTION_QUIT},
+    {4, 0.0f, 1.0f, STR_MENU_DISCONNECT, MENU_ACTION_DISCONNECT},
+    {5, 0.0f, 1.0f, STR_MENU_STATUS, MENU_ACTION_STATUS},
+    {6, 0.0f, 1.0f, STR_MENU_QUIT_APP, MENU_ACTION_QUIT},
 };
 #define MENU_ITEM_COUNT (int)(sizeof(kMenuItems) / sizeof(kMenuItems[0]))
 
@@ -340,13 +341,13 @@ static void draw_menu(cairo_t *cr, const Ui *ui) {
             cairo_rectangle(cr, x, y, w, h);
             cairo_fill(cr);
             cairo_set_source_rgb(cr, 1, 1, 1);
-            draw_centered_label(cr, x, y, w, h, item->label);
+            draw_centered_label(cr, x, y, w, h, tr(item->label));
         } else {
             cairo_set_source_rgb(cr, 0, 0, 0);
             cairo_set_line_width(cr, proportional_border_width(row_h));
             cairo_rectangle(cr, x, y, w, h);
             cairo_stroke(cr);
-            draw_centered_label(cr, x, y, w, h, item->label);
+            draw_centered_label(cr, x, y, w, h, tr(item->label));
         }
     }
 
@@ -380,7 +381,20 @@ static int find_menu_item_index(const Ui *ui, int x, int y) {
  * pedido. "Menu" é diferente: vira "Sair" sem sessão ativa (ver draw_bar) — achado do
  * usuário, 27/08: sem isso o usuário ficava PRESO na tela de conexão, sem nenhum jeito
  * de sair do app antes de conectar em algum lugar. */
-static const char *const kBarLabels[BAR_BUTTON_COUNT] = {"↑", "↓", "Teclado", "Menu"};
+static const char *bar_label(const Ui *ui, int index) {
+    switch ((BarButton)index) {
+    case BAR_SCROLL_UP:
+        return "↑";
+    case BAR_SCROLL_DOWN:
+        return "↓";
+    case BAR_TOGGLE_KEYBOARD:
+        return tr(STR_BAR_KEYBOARD);
+    case BAR_TOGGLE_MENU:
+    default:
+        /* vira "Sair"/"Quit" sem sessão ativa — ver comentário acima */
+        return ui->connected ? tr(STR_BAR_MENU) : tr(STR_BAR_QUIT);
+    }
+}
 
 /* Desenho da barra: mesmo estilo de alto contraste do teclado. Teclado/Menu ficam
  * PERSISTENTEMENTE invertidos enquanto aquele for o modo atual do painel (mesmo
@@ -425,10 +439,7 @@ static void draw_bar(cairo_t *cr, const Ui *ui) {
         bool highlighted = (i == BAR_TOGGLE_KEYBOARD && keyboard_button_active) ||
                            (i == BAR_TOGGLE_MENU && ui->panel_mode == PANEL_MENU);
         bool flashing = ui->flash_source == FLASH_BAR_BUTTON && ui->flash_index == i;
-        /* "Menu" vira "Sair" sem sessão ativa — nunca fica destacado (não é um painel
-         * pra alternar, é ação imediata, mesmo tratamento do scroll). */
-        const char *label =
-            (i == BAR_TOGGLE_MENU && !ui->connected) ? "Sair" : kBarLabels[i];
+        const char *label = bar_label(ui, i);
 
         if (highlighted || flashing) {
             cairo_set_source_rgb(cr, 0, 0, 0);
@@ -553,7 +564,7 @@ static void draw_connecting_panel(cairo_t *cr, const Ui *ui) {
     cairo_set_line_width(cr, proportional_border_width(row_h));
     cairo_rectangle(cr, x, y, w, h);
     cairo_stroke(cr);
-    draw_centered_label(cr, x, y, w, h, "Voltar");
+    draw_centered_label(cr, x, y, w, h, tr(STR_BACK));
 
     cairo_restore(cr);
 }
@@ -580,9 +591,9 @@ static void draw_connect_form_fields(cairo_t *cr, const Ui *ui) {
     int ip_w = ui->screen_width * CONNECT_FORM_IP_WIDTH_PERCENT / 100;
 
     char ip_label[96];
-    snprintf(ip_label, sizeof(ip_label), "IP: %s", ui->form_host);
+    snprintf(ip_label, sizeof(ip_label), "%s%s", tr(STR_FORM_IP), ui->form_host);
     char port_label[32];
-    snprintf(port_label, sizeof(port_label), "Porta: %s", ui->form_port);
+    snprintf(port_label, sizeof(port_label), "%s%s", tr(STR_FORM_PORT), ui->form_port);
     /* Senha mascarada com '*' — o texto real nunca aparece na tela (nem precisa: sem
      * cursor/edição no meio, ver o campo de senha como write-only visualmente). */
     char password_label[64];
@@ -591,7 +602,7 @@ static void draw_connect_form_fields(cairo_t *cr, const Ui *ui) {
         char stars[CONNECT_PASSWORD_BUF_LEN];
         memset(stars, '*', n);
         stars[n] = '\0';
-        snprintf(password_label, sizeof(password_label), "Senha: %s", stars);
+        snprintf(password_label, sizeof(password_label), "%s%s", tr(STR_FORM_PASSWORD), stars);
     }
 
     struct {
@@ -625,7 +636,7 @@ static void draw_connect_form_fields(cairo_t *cr, const Ui *ui) {
     }
 
     int half_w = ui->screen_width / 2;
-    const char *labels[2] = {"Conectar", "Cancelar"};
+    const char *labels[2] = {tr(STR_FORM_CONNECT), tr(STR_FORM_CANCEL)};
     for (int i = 0; i < 2; i++) {
         int x = i * half_w + inset;
         int y = 2 * row_h + inset;
@@ -662,12 +673,12 @@ static void draw_connecting_message(cairo_t *cr, const Ui *ui) {
         /* Item 9: depois de N tentativas falhadas (quem conta é o main.c), o
          * "Conectando..." dá lugar ao aviso — a sessão CONTINUA tentando em segundo
          * plano; se vingar depois, ui_show_session limpa tudo isso sozinho. */
-        snprintf(label, sizeof(label), "Não foi possível conectar a %s:%d",
-                 ui->connecting_host, ui->connecting_port);
+        snprintf(label, sizeof(label), tr(STR_CONNECT_FAILED), ui->connecting_host,
+                 ui->connecting_port);
         draw_centered_label(cr, 0, 0, ui->screen_width, row_h, label);
         draw_centered_label(cr, 0, row_h, ui->screen_width, row_h, ui->connecting_error);
     } else {
-        snprintf(label, sizeof(label), "Conectando a %s:%d...", ui->connecting_host,
+        snprintf(label, sizeof(label), tr(STR_CONNECTING), ui->connecting_host,
                  ui->connecting_port);
         draw_centered_label(cr, 0, 0, ui->screen_width, row_h, label);
     }
@@ -1309,7 +1320,7 @@ void ui_show_connect_error(Ui *ui, const char *detail) {
         return; /* só faz sentido com a tela de conectando ativa (ver contrato no .h) */
     }
     snprintf(ui->connecting_error, sizeof(ui->connecting_error), "%s",
-             detail ? detail : "verifique o IP, a porta e a senha");
+             detail ? detail : tr(STR_CHECK_FIELDS));
     /* só a área do frame muda (as 2 fileiras da mensagem) — painel/barra ficam como
      * estão */
     gtk_widget_queue_draw_area(ui->drawing_area, 0, 0, ui->screen_width, ui->keyboard_top);

@@ -25,4 +25,11 @@ const char *kindle_platform_window_title(void);
  * usar). String estática — não liberar. */
 const char *kindle_platform_data_dir(void);
 
+/* true se o idioma configurado no Kindle é português. Fonte: a variável de ambiente
+ * KINDOW_LANG ("pt"/"en" — override de teste, vence tudo), senão o LANG de
+ * /var/local/system/locale (onde o firmware guarda o idioma escolhido nas
+ * configurações — verificado no device real, 27/08). Qualquer outra língua, arquivo
+ * ausente ou ilegível => false (inglês é o padrão do app). */
+bool kindle_platform_language_is_portuguese(void);
+
 #endif

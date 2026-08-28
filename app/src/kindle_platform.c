@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 
 /* Mantém o Kindle acordado só enquanto este app está na tela — mesmo padrão (e mesma
@@ -38,4 +39,29 @@ const char *kindle_platform_data_dir(void) {
         fprintf(stderr, "kindow: não consegui criar %s (errno=%d)\n", path, errno);
     }
     return path;
+}
+
+bool kindle_platform_language_is_portuguese(void) {
+    const char *override = getenv("KINDOW_LANG");
+    if (override) {
+        return override[0] == 'p' || override[0] == 'P';
+    }
+
+    /* O firmware guarda o idioma escolhido nas configurações como linhas
+     * "LANG=pt_BR.utf8" / "LC_ALL=..." neste arquivo (verificado no device real).
+     * Só o prefixo da língua importa aqui. */
+    FILE *f = fopen("/var/local/system/locale", "r");
+    if (!f) {
+        return false; /* sem arquivo (ex. rodando fora do Kindle): inglês */
+    }
+    char line[64];
+    bool portuguese = false;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "LANG=pt", 7) == 0) {
+            portuguese = true;
+            break;
+        }
+    }
+    fclose(f);
+    return portuguese;
 }

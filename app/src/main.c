@@ -7,6 +7,7 @@
 #include "kindle_platform.h"
 #include "remote_control.h"
 #include "session.h"
+#include "strings.h"
 #include "ui.h"
 
 /*
@@ -272,6 +273,11 @@ static gboolean on_quit_signal(gpointer user_data) {
 
 int main(int argc, char **argv) {
     gtk_init(&argc, &argv);
+
+    /* Língua da UI: decidida uma vez no boot a partir do idioma configurado no Kindle
+     * (inglês é o padrão; KINDOW_LANG=pt|en no ambiente força, pra teste) — antes de
+     * qualquer ui_create/tr(). */
+    strings_set_language(kindle_platform_language_is_portuguese() ? LANG_PT : LANG_EN);
 
     App app = {0};
     snprintf(app.store_path, sizeof(app.store_path), "%s/connections.txt",
