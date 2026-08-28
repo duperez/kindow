@@ -163,7 +163,7 @@ configuration, and the taskbar through tint2's. The three layers are independent
 the chosen values persist on the Pi across sessions.
 
 **Touch is translated, not emulated.** A tap becomes an RFB press+release pair at the
-touched coordinate. Drag is explicit: arming the "Esquerdo" key makes the next touch a
+touched coordinate. Drag is explicit: arming the "Left" key makes the next touch a
 real press-move-release sequence, throttled to avoid flooding the e-ink with
 intermediate refreshes. Scroll buttons send wheel events at the last touched position.
 What a drag *means* — moving a window, selecting text — is decided by the Pi's window
