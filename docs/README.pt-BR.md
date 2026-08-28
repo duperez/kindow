@@ -43,16 +43,16 @@ biblioteca do próprio Kindle. Sem cabos, sem hardware extra.
 
 | Tela de conexão | Nova conexão |
 |:---:|:---:|
-| <img src="images/connect.png" width="380" alt="Tela de conexão: lista de servidores salvos, botão de adicionar, barra do rodapé"> | <img src="images/form.png" width="380" alt="Formulário de nova conexão: campos de IP, porta e senha com o teclado virtual"> |
+| <img src="images/connect-pt.png" width="380" alt="Tela de conexão: lista de servidores salvos, botão de adicionar, barra do rodapé"> | <img src="images/form-pt.png" width="380" alt="Formulário de nova conexão: campos de IP, porta e senha com o teclado virtual"> |
 | *Servidores salvos, mais recente primeiro. Um toque reconecta; "+" adiciona um novo.* | *IP, porta e senha opcional de VNC, digitados no teclado embutido.* |
 
 | Sessão | Menu |
 |:---:|:---:|
-| <img src="images/session-files.png" width="380" alt="Uma sessão: o gerenciador de arquivos do Pi com taskbar e o teclado virtual"> | <img src="images/menu.png" width="380" alt="O painel de menu: pares de zoom, passo de scroll, desconectar, status e sair"> |
+| <img src="images/session-files-pt.png" width="380" alt="Uma sessão: o gerenciador de arquivos do Pi com taskbar e o teclado virtual"> | <img src="images/menu-pt.png" width="380" alt="O painel de menu: pares de zoom, passo de scroll, desconectar, status e sair"> |
 | *O desktop do Pi com o teclado aberto. A barra do rodapé está sempre disponível.* | *Controles de zoom, passo do scroll, desconectar, status da conexão e sair.* |
 
 <div align="center">
-<img src="images/error.png" width="380" alt="Tela de erro: não foi possível conectar, com o motivo e um botão de voltar">
+<img src="images/error-pt.png" width="380" alt="Tela de erro: não foi possível conectar, com o motivo e um botão de voltar">
 
 *Quando uma conexão falha, o app avisa — e diz o porquê — enquanto continua tentando
 em segundo plano.*
