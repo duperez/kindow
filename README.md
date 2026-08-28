@@ -1,97 +1,102 @@
+<div align="center">
+
 # Kindow
+
+**A jailbroken Kindle as a wireless touchscreen for your Raspberry Pi**
+
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Kindle%20(jailbroken)-black)
+![Made with](https://img.shields.io/badge/made%20with-C%20%2B%20GTK2-555)
 
 *[Versão em português](docs/README.pt-BR.md)*
 
-Kindow turns a jailbroken Kindle into a wireless touchscreen for a Raspberry Pi, over
-VNC. The Pi's desktop is rendered on the Kindle's e-ink display, and touch input is
-sent back as mouse and keyboard events. Screen updates are strictly on-demand — the
-server only transmits when content changes, which is both how the RFB protocol works
-and what an e-ink panel requires.
+<img src="docs/images/kindow-photo.jpg" alt="A Kindle on a stand running Kindow, showing the Pi's text editor with 'Hello from Kindow' typed on the on-screen keyboard" width="400">
+&nbsp;
+<img src="docs/images/kindow-photo-files.jpg" alt="The same Kindle browsing the Pi's filesystem with a graphical file manager" width="400">
 
-<p align="center">
-  <img src="docs/images/kindow-photo.jpg" alt="A Kindle on a stand, running Kindow: the Pi's Mousepad editor with 'Hello from Kindow' typed on the on-screen keyboard" width="420">
-  &nbsp;&nbsp;
-  <img src="docs/images/kindow-photo-files.jpg" alt="The same Kindle browsing the Pi's filesystem with the PCManFM file manager" width="420">
-</p>
+</div>
 
-<p align="center">
-  <img src="docs/images/session.png" alt="Framebuffer capture of a Kindow session: the Pi's desktop with Mousepad, taskbar and the on-screen keyboard" width="380">
-  &nbsp;&nbsp;
-  <img src="docs/images/connect.png" alt="Framebuffer capture of the Kindow connection screen: saved Pi list, add-new button, and the bottom bar" width="380">
-</p>
-
-*Top: photos of the device. Bottom: framebuffer captures, pixel-identical to what the
-display shows.*
-
-**Status**: working end to end on real hardware (Kindle KT5 + Raspberry Pi 4).
+Kindow puts your Raspberry Pi's desktop on a Kindle's e-ink screen, wirelessly. Tap to
+click, type on an on-screen keyboard, drag windows, browse files, edit text — the
+Kindle becomes a self-contained touch terminal for the Pi, launched straight from the
+Kindle's own library. No cables, no extra hardware.
 
 ## Features
 
-- **Interactive remote desktop** — the Pi's X session (Openbox, tint2, GTK
-  applications) rendered 1:1. The remote resolution adapts automatically to the
-  connecting Kindle's screen via the RFB `SetDesktopSize` extension; no scaling or
-  cropping.
-- **Touch input** — a tap is a left click. The keyboard's symbols page provides
-  dedicated Left-click (press-and-drag, released when the finger lifts) and
-  Right-click keys.
-- **On-screen keyboard** — sticky Shift/Ctrl modifiers (chords such as Ctrl+C work
-  without multi-touch) and a symbols page.
-- **Persistent bottom bar** — scroll up/down with an adjustable step, keyboard toggle,
-  and menu.
-- **Menu** — remote zoom in three independent layers (application content via Xft/DPI,
-  window decorations, panel), disconnect, connection status, quit.
-- **Connection manager** — history of previously used servers, a form to add new ones
-  (IP, port, password), classic VNC authentication, and explicit error reporting on
-  failed connections.
-- **Library launcher** — starts with a tap from the Kindle's library; SSH is only
-  needed for installation.
+- **Full desktop, 1:1** — the Pi runs a real graphical session (window manager,
+  taskbar, applications), sized automatically to fit the Kindle's screen exactly.
+- **Everything by touch** — tap to click, dedicated right-click and drag keys, scroll
+  buttons with adjustable speed, and an on-screen keyboard with sticky Shift/Ctrl
+  (shortcuts like Ctrl+C work without multi-touch).
+- **Readable at e-ink resolution** — three independent zoom levels (application
+  content, window decorations, taskbar), adjusted live from the Kindle and remembered
+  by the Pi across sessions.
+- **Multiple servers** — a connection manager with history, one-tap reconnect, VNC
+  password support, and clear error messages when a connection fails.
+- **E-ink friendly by design** — the screen only updates when content actually
+  changes; there is no polling, no periodic refresh, no unnecessary redraw.
 
-## Requirements
+## A tour of the app
 
-- A **jailbroken Kindle** with scriptlet support (a tappable `.sh` in the library, the
-  standard mechanism of the [current jailbreak](https://kindlemodding.org/)). Tested on
-  a KT5 (1072×1448). The layout is proportional and should adapt to other resolutions,
-  but no other model has been validated.
+| Connection screen | New connection |
+|:---:|:---:|
+| <img src="docs/images/connect.png" width="380" alt="Connection screen: saved server list, add button, bottom bar"> | <img src="docs/images/form.png" width="380" alt="New-connection form: IP, port and password fields with the on-screen keyboard"> |
+| *Saved servers, most recent first. One tap reconnects; "+" adds a new one.* | *IP, port and optional VNC password, typed on the built-in keyboard.* |
+
+| Session | Menu |
+|:---:|:---:|
+| <img src="docs/images/session-files.png" width="380" alt="A session: the Pi's file manager with taskbar and the on-screen keyboard"> | <img src="docs/images/menu.png" width="380" alt="The menu panel: zoom pairs, scroll step, disconnect, status and quit"> |
+| *The Pi's desktop with the keyboard open. The bottom bar is always available.* | *Zoom controls, scroll step, disconnect, connection status and quit.* |
+
+<div align="center">
+<img src="docs/images/error.png" width="380" alt="Error screen: could not connect, with the reason and a back button">
+
+*When a connection fails, the app says so — and why — while retrying in the background.*
+</div>
+
+## Getting started
+
+### What you need
+
+- A **jailbroken Kindle** with scriptlet support (the standard mechanism of the
+  [current jailbreak](https://kindlemodding.org/)). Developed and tested on a KT5
+  (1072×1448); the proportional layout should adapt to other models, but they are
+  unverified.
 - A **Raspberry Pi** — or any Debian-like Linux with `systemd` — on the same network,
   reachable over SSH.
-- To build the client: the KindleModding cross-compilation toolchain (koxtoolchain +
-  KMC SDK) in a container. See "Building the client".
 
-## Installation
-
-### Server (Pi)
+### Install the server (Pi)
 
 ```bash
 scp -r pi/ pi@<pi-ip>:/tmp/kindow-pi && ssh -t pi@<pi-ip> 'bash /tmp/kindow-pi/install.sh'
 ```
 
-[`install.sh`](pi/install.sh) is idempotent. It installs the required packages
-(TigerVNC, Openbox, tint2, mousepad, xsettingsd), applies the session configuration
-without overwriting user customizations, enables the two services (`vnc-kindle` on port
-5901, `kindow-helperd` on port 5910) and verifies that both respond.
+The installer is idempotent: it installs the packages (TigerVNC, Openbox, tint2,
+mousepad, xsettingsd), applies the session configuration without overwriting your
+customizations, enables the two services and verifies that both respond.
 
-### Client (Kindle)
+### Install the client (Kindle)
 
-With the binary cross-compiled (see below) and root SSH access to the Kindle:
+With the binary cross-compiled (next section) and root SSH access to the Kindle:
 
 ```bash
 ./kindle/deploy.sh <kindle-ip>
 ```
 
-This copies the binary and `libvncclient` to `/mnt/us/kindow/`, installs the
-[`kindle/kindow.sh`](kindle/kindow.sh) scriptlet into `/mnt/us/documents/` — it appears
-as a tappable "Kindow" item in the library — and launches the application.
+This installs the app and a "Kindow" item in the Kindle's library. From then on,
+starting it is a tap — the Home screen lingers for about three seconds before the app
+appears (a deliberate delay to win a race against the system's Home redraw), then the
+connection screen comes up.
 
-### Building the client
+### Build the client from source
 
-The client is written in C against GTK2 (the toolkit shipped in the Kindle firmware)
-and cross-compiled with Meson inside a container providing the KindleModding toolchain.
-Follow the [KindleModding GTK tutorial](https://kindlemodding.org/kindle-dev/gtk-tutorial/)
-to set up the container (koxtoolchain + KMC SDK), then:
+The client is C/GTK2, cross-compiled with Meson using the KindleModding toolchain
+(koxtoolchain + KMC SDK) in a container — the
+[KindleModding GTK tutorial](https://kindlemodding.org/kindle-dev/gtk-tutorial/)
+covers the container setup. Then:
 
 ```bash
-# Once: cross-compile the vendored libvncclient (submodule) and install it into the
-# toolchain sysroot. The complete tested recipe is in docs/findings/libvncclient-api.md.
+# Once: cross-compile the vendored libvncclient (submodule) into the toolchain sysroot
 cd vendor/libvncserver && cmake -B build -S . \
   -DCMAKE_TOOLCHAIN_FILE=../../cmake/Toolchain-arm-kindlehf-linux-gnueabihf.cmake \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=<toolchain-sysroot>/usr \
@@ -104,7 +109,7 @@ cmake --build build && cmake --install build
 cd app && meson setup build --cross-file <your-meson-crosscompile.txt> && ninja -C build
 ```
 
-The pure modules have unit tests that run on any machine, without the toolchain:
+The pure modules have unit tests that run on any machine, no toolchain required:
 
 ```bash
 cd app
@@ -113,84 +118,98 @@ cc -std=gnu11 -Wall -Wextra -Isrc src/keyboard.c tests/test_keyboard.c -o /tmp/t
 cc -std=gnu11 -Wall -Wextra -Isrc src/pixel_convert.c tests/test_pixel_convert.c -o /tmp/t && /tmp/t
 ```
 
-## Usage
+## How it works
 
-1. Tap **"Kindow"** in the Kindle's library. The Home screen remains visible for about
-   three seconds before the application appears; the launcher delays startup to avoid a
-   race with the system's Home screen redraw.
-2. On the **connection screen**, tap a previously used server to reconnect, or **"+"**
-   to enter the IP, port and password of a new one. A blank password means a server
-   without authentication, which is the `install.sh` default. Successful connections
-   are saved to `/mnt/us/kindow/connections.txt`; the password is stored in plain text
-   (see the rationale in
-   [`app/src/connection_store.h`](app/src/connection_store.h)).
-3. In the **session**, touch interacts directly with the Pi's desktop. The bottom bar
-   toggles the keyboard and the menu; the keyboard's `?123` page holds the Left-click
-   (drag) and Right-click keys.
-4. To **switch servers or quit**: menu → "Desconectar do Pi" returns to the connection
-   screen. With no active session, the bar's "Menu" button becomes "Sair" (quit).
+The Kindle and the Pi talk over two independent channels:
+
+```mermaid
+flowchart LR
+    subgraph Kindle["Kindle (client)"]
+        K["kindow-client<br/>C + GTK2 + libvncclient"]
+    end
+    subgraph Pi["Raspberry Pi (server)"]
+        X["Xvnc (TigerVNC) — port 5901<br/>Openbox + tint2 + applications"]
+        H["kindow-helperd — port 5910"]
+        C["xsettingsd / Openbox / tint2<br/>configuration"]
+    end
+    K <-- "RFB (VNC): framebuffer updates,<br/>touch and key events" --> X
+    K -- "zoom commands (plain TCP)" --> H
+    H -- "applies live" --> C
+```
+
+**Display and input** travel over the standard RFB (VNC) protocol. The Pi runs
+TigerVNC in `Xvnc` mode — a virtual X display created for the Kindle, independent of
+any monitor — and the client keeps a single persistent connection with an incremental
+update request always in flight, so the server pushes changes only when something
+actually changes on screen. This matches how e-ink wants to be treated: no traffic and
+no redraw when the desktop is idle. Frames arrive ZRLE-compressed (chosen after
+measuring a ~155× traffic reduction over raw encoding on text scrolling) and are
+converted to grayscale on the client through a lookup table.
+
+**Screen size is negotiated, not scaled.** On connect, the client asks the server to
+resize the virtual display to exactly the Kindle's usable area (screen minus the bar
+and keyboard) via the RFB `SetDesktopSize` extension, and asks again whenever the
+keyboard is shown or hidden. The Pi therefore always renders at the native resolution
+of whatever Kindle connected — pixels map 1:1, nothing is stretched.
+
+**Zoom uses a separate side channel.** Font scale is not part of the VNC protocol, so
+a small daemon on the Pi (`kindow-helperd`) accepts plain-TCP commands from the
+Kindle's menu and applies them live: application content through XSETTINGS (`Xft/DPI`,
+picked up immediately by GTK apps), window decorations through Openbox's
+configuration, and the taskbar through tint2's. The three layers are independent, and
+the chosen values persist on the Pi across sessions.
+
+**Touch is translated, not emulated.** A tap becomes an RFB press+release pair at the
+touched coordinate. Drag is explicit: arming the "Esquerdo" key makes the next touch a
+real press-move-release sequence, throttled to avoid flooding the e-ink with
+intermediate refreshes. Scroll buttons send wheel events at the last touched position.
+What a drag *means* — moving a window, selecting text — is decided by the Pi's window
+manager, exactly as it would be for a real mouse.
+
+**The client is small and deliberately layered**: a protocol module (the only place
+that touches `libvncclient`), a core session module (connection lifecycle, automatic
+reconnection, resize policy), a GTK/Cairo presentation module, a device module for
+Kindle-specific concerns (screensaver control, the window-title convention its window
+manager requires), and pure, unit-tested modules for the keyboard layout, the
+connection history and the pixel conversion. See [`app/src/`](app/src/).
 
 ## Known limitations
 
-- **Portrait only.** Landscape rotation is planned
-  ([`docs/ideias-futuras.md`](docs/ideias-futuras.md)).
-- **Grayscale.** The client converts all color to 256 gray levels, of which the e-ink
-  panel effectively distinguishes about 16. There is no dithering yet; smooth gradients
-  may show banding.
-- **Single validated model.** Only the KT5 (1072×1448) has been tested. The layout is
-  proportional by design, but other models are unverified.
-- **Portuguese-only UI.** Button labels are in Portuguese ("Teclado", "Sair",
-  "Conectando…"); internationalization has not yet been addressed.
-- **Screensaver recovery.** The application disables the Kindle's screensaver while
-  running and restores it on every normal exit path. If the process is killed without
-  cleanup (SIGKILL, crash), the screensaver stays disabled until
-  `lipc-set-prop -i com.lab126.powerd preventScreenSaver 0` is run or the device is
-  rebooted.
-- **Launch delay.** About three seconds from the library tap, as described in "Usage".
-- **No transport encryption.** Classic VNC authentication only, intended for a trusted
-  local network. Do not expose these ports to the internet.
+- **Portrait only** — landscape rotation is on the roadmap.
+- **Grayscale, no dithering yet** — smooth gradients may show banding.
+- **One validated model** — only the KT5 (1072×1448) has been tested.
+- **Portuguese-only UI** — button labels are in Portuguese; internationalization has
+  not yet been addressed.
+- **Plain-text password storage** — saved VNC passwords live unencrypted on the
+  Kindle's storage; anyone with physical or SSH access to the device can read them.
+- **Screensaver recovery after a crash** — if the process dies without cleanup
+  (SIGKILL), the Kindle's screensaver stays disabled until
+  `lipc-set-prop -i com.lab126.powerd preventScreenSaver 0` or a reboot.
+- **No transport encryption** — classic VNC authentication only, intended for a
+  trusted local network. Do not expose these ports to the internet.
 
-## Architecture
+## Roadmap
 
-The client follows a lightweight Ports & Adapters structure; each external dependency
-is isolated behind a dedicated module.
-
-- [`app/src/main.c`](app/src/main.c) — wiring: instantiates the modules and connects
-  their callbacks.
-- [`app/src/session.c`](app/src/session.c) — core: connection lifecycle (connect,
-  automatic reconnection, socket watch), resize policy, and input dispatch. Depends on
-  GLib as the event loop; no GTK, no VNC.
-- [`app/src/ui.c`](app/src/ui.c) — presentation adapter (GTK2/Cairo): window, touch
-  handling, bottom bar, keyboard/menu panel, connection screens. No VNC.
-- [`app/src/vnc_client.c`](app/src/vnc_client.c) — the only module that uses
-  `libvncclient`.
-- [`app/src/kindle_platform.c`](app/src/kindle_platform.c) — device-specific concerns:
-  screensaver control via `lipc`, the window-title convention required by the Kindle's
-  window manager, the data directory.
-- Pure modules with unit tests (no GTK, no VNC):
-  [`keyboard.c`](app/src/keyboard.c) (layout, hit-testing, sticky modifiers),
-  [`connection_store.c`](app/src/connection_store.c) (connection history) and
-  [`pixel_convert.c`](app/src/pixel_convert.c) (color-to-grayscale conversion).
-- [`app/src/remote_control.c`](app/src/remote_control.c) — TCP client for
-  `kindow-helperd`, the zoom side channel outside the RFB protocol.
-- [`pi/`](pi/) — the server side: X session, services, installer.
-- [`kindle/`](kindle/) — launch scriptlet and deploy script.
-- [`vendor/libvncserver`](vendor/libvncserver) — git submodule, pinned at 0.9.15.
-
-## Technical documentation
-
-The documentation under `docs/` is written in Portuguese.
-
-- [`docs/findings/`](docs/findings/) — technical findings, one file per problem: the
-  RFB protocol and encoding choices, the libvncclient API and the bugs worked around in
-  it, the VNC server selection, and the issues only revealed by hardware testing.
-- [`docs/ideias-futuras.md`](docs/ideias-futuras.md) — the roadmap, with the reasoning
-  recorded for each item.
-- [`docs/historico-da-poc.md`](docs/historico-da-poc.md) — the chronological log of the
-  proof-of-concept phase.
+- **Landscape orientation** — 90° rotation done client-side (pixels and touch
+  coordinates), sidestepping the Kindle firmware's rotation lock.
+- **Dithering** — investigate whether ordered dithering in the grayscale conversion
+  visibly improves gradients on the 16-level panel.
+- **Mirroring an existing session** — exploratory: switching from a dedicated virtual
+  display to mirroring the Pi's physical monitor (`x11vnc`), if dynamic resize can be
+  preserved.
+- **The Kindle as a true second display** — exploratory, and possibly a dead end with
+  standard tooling: making the Pi treat the Kindle as an additional Xrandr output
+  rather than a separate session.
+- **Screensaver watchdog** — automatic recovery of the screensaver setting after an
+  abrupt crash, instead of the manual command.
+- **Encrypted password storage** — limited value without OS keychain support, but
+  worth evaluating.
+- **Network discovery** — a UDP-broadcast "who's running kindow-helperd?" so new Pis
+  can be found without typing an IP.
+- **One-tap Pi setup** — bootstrapping a fresh Pi (install + services) over SSH from
+  the Kindle's own connection form.
 
 ## License
 
-[GPL-3.0](LICENSE). The vendored `libvncclient` is licensed GPL-2.0-or-later, so any
-distributed binary is subject to GPL terms; licensing the project under GPL-3.0 keeps
-the whole repository consistent with its dependency.
+[GPL-3.0](LICENSE). The vendored `libvncclient` is GPL-2.0-or-later; licensing the
+project under GPL-3.0 keeps the repository consistent with its dependency.
